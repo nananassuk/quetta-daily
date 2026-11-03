@@ -140,6 +140,14 @@ details.extra summary{cursor:pointer;font-weight:600;padding:4px 0}
 .members .mrow .btn{padding:0 8px}
 .checked-badge{color:var(--teal-deep);font-weight:700}
 .recheck{color:var(--gold-deep);font-weight:600}
+.sugg{position:absolute;z-index:80;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:260px;overflow:auto;min-width:200px}
+.sugg div{padding:7px 12px;cursor:pointer;white-space:nowrap}
+.sugg div.on,.sugg div:hover{background:var(--teal-soft)}
+.sugg mark{background:none;color:var(--teal-deep);font-weight:700}
+.mrows{display:flex;flex-direction:column;gap:8px}
+.mrows .madd{grid-template-columns:96px minmax(170px,230px) auto 130px 1fr auto}
+.mrows .madd .gname{font-weight:700;color:var(--teal-deep);font-size:13px}
+@media (max-width:760px){.mrows .madd{grid-template-columns:1fr 1fr}}
 .presets{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
 .presets button{border:1px solid var(--teal);background:#fff;color:var(--teal-deep);border-radius:99px;padding:5px 12px;cursor:pointer}
 .presets button:hover{background:var(--teal-soft)}
@@ -228,7 +236,9 @@ const ymOf = s => s.slice(0, 7);
 const daysOf = ym => { const [y, m] = ym.split('-').map(Number); const n = new Date(y, m, 0).getDate(); return Array.from({ length: n }, (_, i) => `${ym}-${pad(i + 1)}`); };
 const acct6 = no => String(no || '').replace(/\D/g, '').slice(-6);
 const defaultLabel = t => { const m1 = (t.memo1 || t.memo || '').trim(); const p = (t.party || '').trim(); return (!p || p === m1) ? m1 : `${m1} / ${p}`; };
-const rowLabel = t => t.label || defaultLabel(t);
+const PREFIX_OF = { fn: null };
+const autoLabel = t => (PREFIX_OF.fn ? PREFIX_OF.fn(t) : '') + defaultLabel(t);
+const rowLabel = t => t.label || autoLabel(t);
 const cmpTx = (a, b) => (a.date + a.time).localeCompare(b.date + b.time) || (a.ord || 0) - (b.ord || 0);
 
 const DEFAULT_ACCOUNTS = [
@@ -609,6 +619,19 @@ async function loadSettings() {
   rs.forEach(d => S.rules[d.id] = d.data());
 }
 const accMap = () => new Map(S.accounts.map(a => [a.acct6, a]));
+const bankShort = a => String(a.bank || '').replace(/은행|증권/g, '').trim() || '';
+const accName = a => a ? `${bankShort(a)} ${a.acct6}`.trim() : '';
+const accNameOf = acct6 => { const a = S.accounts.find(x => x.acct6 === acct6); return a ? accName(a) : acct6; };
+const PREFIX_BY_SCHOOL = { '기숙 QUETTA': '학원_', '퀀텀1': '퀀텀1_', '퀀텀2': '퀀텀2_', '이천DS연수원': '이천DS_', '양양DS연수원': '양양DS_' };
+const defaultPrefix = a => PREFIX_BY_SCHOOL[String(a.school || '').trim()] || '';
+const prefixOfAcc = a => a ? (a.prefix !== undefined && a.prefix !== null ? a.prefix : defaultPrefix(a)) : '';
+const allPrefixes = () => [...new Set(S.accounts.map(prefixOfAcc).filter(Boolean))];
+PREFIX_OF.fn = t => {
+  const a = S.accounts.find(x => x.acct6 === t.acct6), p = prefixOfAcc(a), d = defaultLabel(t);
+  if (!p || allPrefixes().some(x => d.startsWith(x))) return '';
+  return p;
+};
+const ruleLabelFor = (rule, t) => (rule.pfx ? prefixOfAcc(S.accounts.find(x => x.acct6 === t.acct6)) : '') + rule.label;
 const accOrder = () => new Map(S.accounts.map((a, i) => [a.acct6, i]));
 
 async function getMonth(ym, force) {
@@ -719,7 +742,7 @@ async function renderDay() {
     const o = num(op.acc[a.acct6]), i = num(f.acctIn[a.acct6]), x = num(f.acctOut[a.acct6]), c = o + i - x;
     const b = bank[a.acct6]; let chk = '<span class="hint">-</span>';
     if (b !== undefined) { anyBank = true; const d = c - b; if (d === 0) chk = '<span class="okC">일치</span>'; else { allOk = false; chk = `<span class="diff">차이 ${won(d)}</span>`; } }
-    return `<tr><td><span class="tag">${esc(a.short || a.acct6)}</span> <span class="hint">${esc(a.school)}</span></td><td class="num">${won(o)}</td><td class="num inC">${wonOrBlank(i)}</td><td class="num outC">${wonOrBlank(x)}</td><td class="num"><b>${won(c)}</b></td><td class="num hint">${b !== undefined ? won(b) : ''}</td><td>${chk}</td></tr>`;
+    return `<tr><td><span class="tag">${esc(accName(a))}</span> <span class="hint">${esc(a.school)}</span></td><td class="num">${won(o)}</td><td class="num inC">${wonOrBlank(i)}</td><td class="num outC">${wonOrBlank(x)}</td><td class="num"><b>${won(c)}</b></td><td class="num hint">${b !== undefined ? won(b) : ''}</td><td>${chk}</td></tr>`;
   }).join('');
   const sum = k => S.accounts.reduce((s, a) => s + num(k(a)), 0);
   const tO = sum(a => op.acc[a.acct6]), tI = sum(a => f.acctIn[a.acct6]), tX = sum(a => f.acctOut[a.acct6]);
@@ -748,13 +771,12 @@ async function renderDay() {
         <tr><td><span class="tag cash">현금</span></td><td class="num">${won(op.cash)}</td><td class="num inC">${wonOrBlank(f.cashIn)}</td><td class="num outC">${wonOrBlank(f.cashOut)}</td><td class="num"><b>${won(cashClose)}</b></td><td></td><td></td></tr>
       </tbody></table></div>
   </div>
-  ${S.sel.size ? `<div class="toolbar"><span>${S.sel.size}건 선택</span><span class="spacer"></span><button class="btn sm" data-act="group">선택한 건 묶기</button><button class="btn sm" data-act="clearsel">선택 해제</button></div>` : ''}
+  ${S.sel.size ? `<div class="toolbar"><span>${S.sel.size}건 선택 · 합계 <b>${won([...S.sel].map(findTx).filter(Boolean).reduce((s, t) => s + num(t.inAmt) + num(t.outAmt), 0))}</b>원</span><span class="spacer"></span><button class="btn sm" data-act="group">선택한 건 묶기</button><button class="btn sm" data-act="clearsel">선택 해제</button></div>` : ''}
   <div class="ledgers">
     ${ledgerHtml('in', f.inRows, am)}
     ${ledgerHtml('out', f.outRows, am)}
   </div>
-  <div class="panel" style="margin-top:18px">${manualPanelHtml(f, op)}</div>
-  <datalist id="labelHints">${labelHints().map(x => `<option value="${esc(x)}">`).join('')}</datalist>`;
+  <div class="panel" style="margin-top:18px">${manualPanelHtml(f, op)}</div>`;
 }
 
 function ledgerHtml(dir, rows, am) {
@@ -768,11 +790,11 @@ function ledgerHtml(dir, rows, am) {
 
 function entryHtml(r, am) {
   const acc = r.acct6 ? am.get(r.acct6) : null;
-  const tag = acc ? `<span class="tag">${esc(acc.short || acc.acct6)}</span>` : '<span class="tag cash">현금</span>';
+  const tag = acc ? `<span class="tag">${esc(accName(acc))}</span>` : '<span class="tag cash">현금</span>';
   if (r.manual) {
     return `<div class="entry"><span></span>
       <div class="meta">${tag}<span class="src manual">직접 입력</span></div>
-      <div class="lbl"><input list="labelHints" data-act="m-label" data-dir="${r.dir}" data-id="${r.manual.id}" value="${esc(r.label)}"></div>
+      <div class="lbl"><input data-suggest data-act="m-label" data-dir="${r.dir}" data-id="${r.manual.id}" value="${esc(r.label)}"></div>
       <div class="row"><input class="in num" style="width:120px" data-act="m-amt" data-dir="${r.dir}" data-id="${r.manual.id}" value="${won(r.amt)}"><button class="btn ghost sm" data-act="m-del" data-dir="${r.dir}" data-id="${r.manual.id}" aria-label="삭제">삭제</button></div>
     </div>`;
   }
@@ -781,10 +803,10 @@ function entryHtml(r, am) {
     const valid = chk && chk.count === r.members.length && chk.sum === r.amt;
     const stale = chk && !valid;
     const opened = !valid || S.open.has(r.autoKey);
-    const who = chk ? String(chk.by || '').split('@')[0] : '', when = chk && chk.at ? new Date(chk.at).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+    const who = chk ? (String(chk.by || '').match(/[A-Za-z]/) || ['?'])[0].toUpperCase() : '', when = chk && chk.at ? (d => `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`)(new Date(chk.at)) : '';
     return `<div class="entry auto ${valid ? 'checked' : ''}"><span></span>
       <div class="meta">${tag}<span class="src rule">카드 입금 자동 묶음 ${r.members.length}건</span>
-        ${valid ? `<span class="checked-badge">✓ 확인함 · ${esc(who)} · ${esc(when)}</span><button class="btn ghost sm" data-act="atoggle" data-key="${r.autoKey}">${opened ? '접기' : '펼쳐 보기'}</button><button class="btn ghost sm" data-act="auncheck" data-acct="${r.acct6}">확인 취소</button>`
+        ${valid ? `<span class="checked-badge" title="${esc(chk.by)}">✓ ${esc(who)} · ${esc(when)}</span><button class="btn ghost sm" data-act="atoggle" data-key="${r.autoKey}">${opened ? '접기' : '펼쳐 보기'}</button><button class="btn ghost sm" data-act="auncheck" data-acct="${r.acct6}">확인 취소</button>`
                : `${stale ? '<span class="recheck">확인 후 내역이 바뀌어 다시 확인이 필요해요</span>' : ''}<button class="btn sm primary" data-act="acheck" data-acct="${r.acct6}" data-count="${r.members.length}" data-sum="${r.amt}">확인</button>`}</div>
       <div class="lbl"><b>${esc(r.label)}</b></div>
       <div class="amt">${won(r.amt)}</div>
@@ -795,7 +817,7 @@ function entryHtml(r, am) {
     const opened = S.open.has(r.groupId);
     return `<div class="entry group"><span></span>
       <div class="meta">${tag}<span class="src rule">${r.members.length}건 묶음</span><button class="btn ghost sm" data-act="toggle" data-gid="${r.groupId}">${opened ? '접기' : '펼치기'}</button><button class="btn ghost sm" data-act="ungroup" data-gid="${r.groupId}">묶기 해제</button></div>
-      <div class="lbl"><input list="labelHints" data-act="g-label" data-gid="${r.groupId}" value="${esc(r.label)}" class="edited"></div>
+      <div class="lbl"><input data-suggest data-act="g-label" data-gid="${r.groupId}" value="${esc(r.label)}" class="edited"></div>
       <div class="amt">${won(r.amt)}</div>
       ${opened ? `<div class="members">${r.members.map(t => `<div><span>${esc(t.time)} · ${esc(defaultLabel(t))}</span><span class="num">${won(r.dir === 'in' ? t.inAmt : t.outAmt)}</span></div>`).join('')}</div>` : ''}
     </div>`;
@@ -805,7 +827,7 @@ function entryHtml(r, am) {
   return `<div class="entry ${sel ? 'sel' : ''}">
     <input type="checkbox" data-act="sel" data-id="${t.id}" ${sel ? 'checked' : ''} aria-label="선택">
     <div class="meta">${tag}<span>${esc(t.time)}</span><span>적요1: ${esc(t.memo1 || t.memo)}</span><span>의뢰인/수취인: ${esc(t.party)}</span>${src}</div>
-    <div class="lbl"><input list="labelHints" data-act="label" data-id="${t.id}" value="${esc(r.label)}" class="${t.label ? 'edited' : ''}" title="원래 값: ${esc(defaultLabel(t))}"></div>
+    <div class="lbl"><input data-suggest data-act="label" data-id="${t.id}" value="${esc(r.label)}" class="${t.label ? 'edited' : ''}" title="원래 값: ${esc(autoLabel(t))}"></div>
     <div class="amt">${won(r.amt)}</div>
   </div>`;
 }
@@ -833,8 +855,41 @@ function labelHints() {
     m.txns.forEach(t => { if (t.label) s.add(t.label); if (t.groupLabel) s.add(t.groupLabel); });
     Object.values(m.manual).forEach(d => ['inRows', 'outRows', 'entries'].forEach(k => (d[k] || []).forEach(r => r.label && s.add(r.label))));
   });
-  return [...s].sort((a, b) => a.localeCompare(b)).slice(0, 800);
+  return [...s];
 }
+/* 두 글자 이상 치면 예전에 쓴 내역 추천 */
+const SG = { el: null, input: null, idx: -1, items: [] };
+function hideSugg() { if (SG.el) SG.el.remove(); SG.el = null; SG.input = null; SG.idx = -1; }
+function showSugg(input) {
+  const v = input.value.trim();
+  if (v.length < 2) return hideSugg();
+  const low = v.toLowerCase();
+  const items = labelHints().filter(x => x.toLowerCase().includes(low) && x !== v)
+    .sort((a, b) => (a.toLowerCase().indexOf(low) - b.toLowerCase().indexOf(low)) || a.length - b.length).slice(0, 8);
+  if (!items.length) return hideSugg();
+  if (!SG.el) { SG.el = document.createElement('div'); SG.el.className = 'sugg'; document.body.appendChild(SG.el); }
+  SG.input = input; SG.items = items; SG.idx = -1;
+  const r = input.getBoundingClientRect();
+  Object.assign(SG.el.style, { left: (r.left + window.scrollX) + 'px', top: (r.bottom + window.scrollY + 2) + 'px', minWidth: r.width + 'px' });
+  SG.el.innerHTML = items.map((x, i) => { const k = x.toLowerCase().indexOf(low); return `<div data-i="${i}">${esc(x.slice(0, k))}<mark>${esc(x.slice(k, k + v.length))}</mark>${esc(x.slice(k + v.length))}</div>`; }).join('');
+  SG.el.onmousedown = e => { const d = e.target.closest('[data-i]'); if (!d) return; e.preventDefault(); pickSugg(+d.dataset.i); };
+}
+function pickSugg(i) {
+  const input = SG.input, val = SG.items[i]; hideSugg();
+  if (!input) return;
+  input.value = val; input.focus();
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+}
+document.addEventListener('input', e => { if (e.target.matches && e.target.matches('[data-suggest]')) showSugg(e.target); });
+document.addEventListener('focusout', e => { if (e.target === SG.input) setTimeout(() => { if (document.activeElement !== SG.input) hideSugg(); }, 120); });
+document.addEventListener('keydown', e => {
+  if (!SG.el || e.target !== SG.input) return;
+  const n = SG.items.length;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); SG.idx = (SG.idx + (e.key === 'ArrowDown' ? 1 : -1) + n) % n; SG.el.querySelectorAll('[data-i]').forEach((d, i) => d.classList.toggle('on', i === SG.idx)); }
+  else if (e.key === 'Enter' && SG.idx >= 0) { e.preventDefault(); e.stopImmediatePropagation(); pickSugg(SG.idx); }
+  else if (e.key === 'Escape') hideSugg();
+}, true);
+window.addEventListener('scroll', hideSugg, true);
 
 /* 직접 입력 항목 목록 */
 function manualItems() {
@@ -851,8 +906,8 @@ const itemLabel = key => { if (key === 'people.reg') return '인원 · 등록'; 
 function manualPanelHtml(f, op) {
   const man = f.man || {}, am = accMap(), v = x => wonOrBlank(x);
   const rows = [];
-  (man.inRows || []).forEach(r => rows.push({ kind: 'in', r, item: r.acct6 === 'cash' || !am.has(r.acct6) ? '현금입금' : `계좌입금 · ${(am.get(r.acct6) || {}).short || r.acct6}` }));
-  (man.outRows || []).forEach(r => rows.push({ kind: 'out', r, item: r.acct6 === 'cash' || !am.has(r.acct6) ? '현금출금' : `계좌출금 · ${(am.get(r.acct6) || {}).short || r.acct6}` }));
+  (man.inRows || []).forEach(r => rows.push({ kind: 'in', r, item: r.acct6 === 'cash' || !am.has(r.acct6) ? '현금입금' : `계좌입금 · ${accNameOf(r.acct6)}` }));
+  (man.outRows || []).forEach(r => rows.push({ kind: 'out', r, item: r.acct6 === 'cash' || !am.has(r.acct6) ? '현금출금' : `계좌출금 · ${accNameOf(r.acct6)}` }));
   (man.entries || []).forEach(r => rows.push({ kind: 'entry', r, item: itemLabel(r.key) }));
   // 이전 방식으로 입력한 값 (칸 입력)
   const legacy = [];
@@ -863,23 +918,27 @@ function manualPanelHtml(f, op) {
     const amtAttr = kind === 'entry' ? `data-act="e-amt" data-id="${r.id}"` : `data-act="m-amt" data-dir="${kind}" data-id="${r.id}"`;
     const lblAttr = kind === 'entry' ? `data-act="e-label" data-id="${r.id}"` : `data-act="m-label" data-dir="${kind}" data-id="${r.id}"`;
     const delAttr = kind === 'entry' ? `data-act="e-del" data-id="${r.id}"` : `data-act="m-del" data-dir="${kind}" data-id="${r.id}"`;
-    return `<tr><td class="item">${esc(item)}</td><td><input class="in" list="labelHints" ${lblAttr} value="${esc(r.label || '')}" placeholder="내역"></td>
+    return `<tr><td class="item">${esc(item)}</td><td><input class="in" data-suggest ${lblAttr} value="${esc(r.label || '')}" placeholder="내역"></td>
       <td class="amt"><input class="in num" ${amtAttr} value="${v(r.amt)}"></td><td><button class="btn ghost sm" ${delAttr}>삭제</button></td></tr>`;
   }).concat(legacy.map(l => `<tr><td class="item">${esc(itemLabel(l.key))}</td><td class="hint">이전 방식으로 입력한 값</td><td class="amt num">${won(l.amt)}${isPeople(l.key) ? '명' : ''}</td><td><button class="btn ghost sm" data-act="legacy-del" data-key="${l.key}">삭제</button></td></tr>`)).join('');
-  const sel = S.mItem || 'cashIn';
-  const opts = manualItems().map(([g, items]) => `<optgroup label="${esc(g)}">${items.map(([k, l]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${esc(l)}</option>`).join('')}</optgroup>`).join('');
-  const acctOpts = S.accounts.map(a => `<option value="${a.acct6}" ${S.mAcct === a.acct6 ? 'selected' : ''}>${esc(a.short || a.acct6)}</option>`).join('');
-  const needAcct = sel === 'acctIn' || sel === 'acctOut';
+  S.mItems = S.mItems || {};
+  const acctOpts = S.accounts.map(a => `<option value="${a.acct6}" ${S.mAcct === a.acct6 ? 'selected' : ''}>${esc(accName(a))}</option>`).join('');
+  const lines = manualItems().filter(([, items]) => items.length).map(([g, items], gi) => {
+    const sel = S.mItems[gi] || items[0][0], needAcct = sel === 'acctIn' || sel === 'acctOut';
+    const short = l => l.replace(/^(매출|채권 및 적금|대여금|차입금) · /, '');
+    return `<div class="madd" data-g="${gi}">
+      <span class="gname">${esc(g)}</span>
+      <select class="in" data-m="item" aria-label="${esc(g)} 항목">${items.map(([k, l]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${esc(g === '현금·계좌' ? l.replace(' (은행 내역 없는 계좌)', '') : short(l))}</option>`).join('')}</select>
+      <select class="in acct" data-m="acct" aria-label="계좌" ${needAcct ? '' : 'hidden'}>${acctOpts}</select>
+      <input class="in num" data-m="amt" inputmode="numeric" placeholder="금액" aria-label="금액">
+      <input class="in" data-m="label" data-suggest placeholder="내역" aria-label="내역">
+      <button class="btn primary" data-act="m-add" data-g="${gi}">추가</button>
+    </div>`;
+  }).join('');
   return `<div class="mpanel">
     <h2>직접 입력 <span class="hint" style="font-weight:400">현금·매출·채권처럼 은행 내역에 없는 항목</span></h2>
     ${rows.length || legacy.length ? `<div class="scroll"><table class="mlist"><tbody>${list}</tbody></table></div>` : '<p class="hint">아직 직접 입력한 항목이 없어요.</p>'}
-    <div class="madd">
-      <select class="in" id="mItem" aria-label="항목">${opts}</select>
-      <select class="in acct" id="mAcct" aria-label="계좌" ${needAcct ? '' : 'hidden'}>${acctOpts}</select>
-      <input class="in num" id="mAmt" inputmode="numeric" placeholder="${isPeople(sel) ? '인원(명)' : '금액'}" aria-label="금액">
-      <input class="in" id="mLabel" list="labelHints" placeholder="내역 (예: 학원_10월 시감료)" aria-label="내역">
-      <button class="btn primary" data-act="m-add">추가</button>
-    </div>
+    <div class="mrows">${lines}</div>
   </div>`;
 }
 
@@ -896,7 +955,7 @@ dayEl.addEventListener('click', async e => {
   else if (act === 'group') groupSelected();
   else if (act === 'toggle') { const g = b.dataset.gid; S.open.has(g) ? S.open.delete(g) : S.open.add(g); renderDay(); }
   else if (act === 'ungroup') ungroup(b.dataset.gid);
-  else if (act === 'm-add') addManualEntry();
+  else if (act === 'm-add') addManualEntry(b.closest('.madd'));
   else if (act === 'atoggle') { const k = b.dataset.key; S.open.has(k) ? S.open.delete(k) : S.open.add(k); renderDay(); }
   else if (act === 'acheck') setAutoCheck(b.dataset.acct, { by: S.user.email, at: Date.now(), count: +b.dataset.count, sum: +b.dataset.sum });
   else if (act === 'auncheck') setAutoCheck(b.dataset.acct, null);
@@ -917,12 +976,14 @@ dayEl.addEventListener('change', async e => {
   else if (act === 'ppl') savePeople(t.dataset.k, t.value);
   else if (act === 'e-label') updateEntry(t.dataset.id, { label: t.value.trim() });
   else if (act === 'e-amt') updateEntry(t.dataset.id, { amt: num(t.value) });
-  else if (t.id === 'mItem') { S.mItem = t.value; const need = t.value === 'acctIn' || t.value === 'acctOut'; $('#mAcct').hidden = !need; $('#mAmt').placeholder = t.value.startsWith('people.') ? '인원(명)' : '금액'; }
-  else if (t.id === 'mAcct') S.mAcct = t.value;
 });
-dayEl.addEventListener('change', e => { const t = e.target; if (t.id === 'mItem') { S.mItem = t.value; const need = t.value === 'acctIn' || t.value === 'acctOut'; $('#mAcct').hidden = !need; $('#mAmt').placeholder = t.value.startsWith('people.') ? '인원(명)' : '금액'; } else if (t.id === 'mAcct') S.mAcct = t.value; });
+dayEl.addEventListener('change', e => {
+  const t = e.target, row = t.closest && t.closest('.madd'); if (!row) return;
+  if (t.dataset.m === 'item') { S.mItems = S.mItems || {}; S.mItems[row.dataset.g] = t.value; row.querySelector('[data-m=acct]').hidden = !(t.value === 'acctIn' || t.value === 'acctOut'); }
+  else if (t.dataset.m === 'acct') S.mAcct = t.value;
+});
 dayEl.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && (e.target.id === 'mLabel' || e.target.id === 'mAmt')) { e.preventDefault(); return addManualEntry(); }
+  if (e.key === 'Enter' && e.target.closest && e.target.closest('.madd') && e.target.matches('input')) { e.preventDefault(); return addManualEntry(e.target.closest('.madd')); }
   if (e.key !== 'Enter' || !e.target.matches('.lbl input')) return;
   e.preventDefault();
   const all = [...dayEl.querySelectorAll('.lbl input')], i = all.indexOf(e.target);
@@ -931,7 +992,7 @@ dayEl.addEventListener('keydown', e => {
 
 async function saveLabel(id, raw) {
   const t = findTx(id); if (!t) return;
-  const val = raw.trim(), def = defaultLabel(t);
+  const val = raw.trim(), def = autoLabel(t);
   if (!val || val === def) {
     if (!t.label) return;
     await db.collection('txns').doc(id).update({ label: null, labelSrc: null });
@@ -943,12 +1004,13 @@ async function saveLabel(id, raw) {
   let msg = '저장했어요';
   if (S.applyRule) {
     const k = ruleKey(t);
-    const rule = { label: val, memo1: (t.memo1 || t.memo || '').trim(), party: (t.party || '').trim(), updatedAt: TS(), by: S.user.email };
+    const pfxNow = PREFIX_OF.fn(t), pfx = !!pfxNow && val.startsWith(pfxNow);
+    const rule = { label: pfx ? val.slice(pfxNow.length) : val, pfx, memo1: (t.memo1 || t.memo || '').trim(), party: (t.party || '').trim(), updatedAt: TS(), by: S.user.email };
     await db.collection('rules').doc(k).set(rule); S.rules[k] = rule;
     const targets = [];
     for (const m of Object.values(S.months)) for (const x of m.txns.values()) if (x.id !== id && !x.label && ruleKey(x) === k) targets.push(x);
-    await commitBatches(targets.map(x => ref => ref.update(db.collection('txns').doc(x.id), { label: val, labelSrc: 'rule' })));
-    targets.forEach(x => { x.label = val; x.labelSrc = 'rule'; });
+    await commitBatches(targets.map(x => ref => ref.update(db.collection('txns').doc(x.id), { label: ruleLabelFor(rule, x), labelSrc: 'rule' })));
+    targets.forEach(x => { x.label = ruleLabelFor(rule, x); x.labelSrc = 'rule'; });
     msg = targets.length ? `저장했어요. 같은 내역 ${targets.length}건에도 적용했어요` : '저장했어요. 다음 업로드부터 같은 내역에 자동 적용돼요';
   }
   toast(msg); renderDay();
@@ -979,7 +1041,7 @@ function pickGroupName(def, n, sum) {
     bg.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-label="묶기 이름">
       <h3>${n}건 · ${won(sum)}원 묶기</h3>
       ${S.groupNames.length ? `<p class="hint" style="margin:0 0 6px">자주 쓰는 이름을 누르면 바로 묶여요</p><div class="presets">${S.groupNames.map(g => `<button data-g="${esc(g)}">${esc(g)}</button>`).join('')}</div>` : '<p class="hint">설정에서 자주 쓰는 이름을 등록하면 여기 버튼으로 나와요.</p>'}
-      <input class="in" id="gnInput" list="labelHints" style="width:100%" value="${esc(def)}" placeholder="묶은 내역 이름">
+      <input class="in" id="gnInput" data-suggest style="width:100%" value="${esc(def)}" placeholder="묶은 내역 이름">
       <label class="row hint" style="margin:10px 0"><input type="checkbox" id="gnSave"> 자주 쓰는 이름에 저장</label>
       <div class="row" style="justify-content:flex-end"><button class="btn ghost" id="gnCancel">취소</button><button class="btn primary" id="gnOk">묶기</button></div></div>`;
     document.body.appendChild(bg);
@@ -1010,15 +1072,16 @@ async function saveGroupLabel(gid, raw) {
   ts.forEach(t => t.groupLabel = val); toast('저장했어요');
 }
 
-async function addManualEntry() {
-  const key = $('#mItem').value, amt = num($('#mAmt').value), label = $('#mLabel').value.trim();
-  if (!amt) { toast(key.startsWith('people.') ? '인원을 입력해 주세요' : '금액을 입력해 주세요'); return $('#mAmt').focus(); }
+async function addManualEntry(row) {
+  const q = s => row.querySelector(`[data-m=${s}]`);
+  const key = q('item').value, amt = num(q('amt').value), label = q('label').value.trim(), gi = row.dataset.g;
+  if (!amt) { toast('금액을 입력해 주세요'); return q('amt').focus(); }
   const m = S.months[ymOf(S.date)], doc = m.manual[S.date] = m.manual[S.date] || {};
   const id = 'm' + Date.now().toString(36);
-  S.mItem = key;
+  S.mItems = S.mItems || {}; S.mItems[gi] = key;
   if (['cashIn', 'cashOut', 'acctIn', 'acctOut'].includes(key)) {
-    if (!label) { toast('입/출금 내역에 표시될 내역을 입력해 주세요'); return $('#mLabel').focus(); }
-    const dk = key.endsWith('In') ? 'inRows' : 'outRows', acct = key.startsWith('acct') ? $('#mAcct').value : 'cash';
+    if (!label) { toast('입/출금 내역에 표시될 내역을 입력해 주세요'); return q('label').focus(); }
+    const dk = key.endsWith('In') ? 'inRows' : 'outRows', acct = key.startsWith('acct') ? q('acct').value : 'cash';
     if (key.startsWith('acct')) S.mAcct = acct;
     doc[dk] = [...(doc[dk] || []), { id, acct6: acct, label, amt }];
     await db.collection('manual').doc(S.date).set({ [dk]: doc[dk], updatedAt: TS(), by: S.user.email }, { merge: true });
@@ -1028,7 +1091,14 @@ async function addManualEntry() {
   }
   toast('추가했어요');
   await renderDay();
-  const a = $('#mAmt'); if (a) a.focus();
+  const again = dayEl.querySelector(`.madd[data-g="${gi}"] [data-m=amt]`); if (again) again.focus();
+}
+async function updateEntry(id, patch) {
+  const m = S.months[ymOf(S.date)], doc = m.manual[S.date] || {};
+  doc.entries = (doc.entries || []).flatMap(r => r.id !== id ? [r] : (patch ? [{ ...r, ...patch }] : []));
+  m.manual[S.date] = doc;
+  await db.collection('manual').doc(S.date).set({ entries: doc.entries, updatedAt: TS(), by: S.user.email }, { merge: true });
+  toast(patch ? '저장했어요' : '삭제했어요'); renderDay();
 }
 async function savePeople(k, raw) {
   const m = S.months[ymOf(S.date)], doc = m.manual[S.date] = m.manual[S.date] || {};
@@ -1043,13 +1113,6 @@ async function setAutoCheck(acct, val) {
   await db.collection('manual').doc(S.date).set({ autoChecks: { [acct]: val }, updatedAt: TS(), by: S.user.email }, { merge: true });
   if (val) S.open.delete('auto:' + acct);
   toast(val ? '확인했어요' : '확인을 취소했어요'); renderDay();
-}
-async function updateEntry(id, patch) {
-  const m = S.months[ymOf(S.date)], doc = m.manual[S.date] || {};
-  doc.entries = (doc.entries || []).flatMap(r => r.id !== id ? [r] : (patch ? [{ ...r, ...patch }] : []));
-  m.manual[S.date] = doc;
-  await db.collection('manual').doc(S.date).set({ entries: doc.entries, updatedAt: TS(), by: S.user.email }, { merge: true });
-  toast(patch ? '저장했어요' : '삭제했어요'); renderDay();
 }
 async function updateManual(dir, id, patch) {
   const m = S.months[ymOf(S.date)], doc = m.manual[S.date] || {}, key = dir === 'in' ? 'inRows' : 'outRows';
@@ -1088,7 +1151,7 @@ async function renderTxns() {
   const el = $('#v-txns');
   if (!S.tx.list) await busy(loadTxList);
   const am = accMap();
-  const accOpts = `<option value="all">전체 계좌</option>` + S.accounts.map(a => `<option value="${a.acct6}" ${S.tx.acct === a.acct6 ? 'selected' : ''}>${esc(a.short)}</option>`).join('');
+  const accOpts = `<option value="all">전체 계좌</option>` + S.accounts.map(a => `<option value="${a.acct6}" ${S.tx.acct === a.acct6 ? 'selected' : ''}>${esc(accName(a))}</option>`).join('');
   el.innerHTML = `<div class="panel">
     <h2>거래내역</h2>
     <div class="row">
@@ -1134,7 +1197,7 @@ function drawTxBody(am) {
   } else {
     const shown = list.slice(0, 1000);
     html += `<div class="scroll"><table class="t"><thead><tr><th>거래일자</th><th>시간</th><th>계좌</th><th class="num">입금액</th><th class="num">출금액</th><th class="num">잔액</th><th>적요1</th><th>의뢰인/수취인</th><th>일보 내역</th><th>적요2</th></tr></thead><tbody>
-      ${shown.map(t => `<tr><td>${t.date}</td><td>${esc(t.time)}</td><td><span class="tag">${esc((am.get(t.acct6) || {}).short || t.alias || t.acct6)}</span></td><td class="num inC">${wonOrBlank(t.inAmt)}</td><td class="num outC">${wonOrBlank(t.outAmt)}</td><td class="num hint">${won(t.bal)}</td><td>${esc(t.memo1)}</td><td>${esc(t.party)}</td><td>${esc(t.groupLabel || rowLabel(t))}</td><td class="hint">${esc(t.memo2)}</td></tr>`).join('')}
+      ${shown.map(t => `<tr><td>${t.date}</td><td>${esc(t.time)}</td><td><span class="tag">${esc(am.has(t.acct6) ? accName(am.get(t.acct6)) : (t.alias || t.acct6))}</span></td><td class="num inC">${wonOrBlank(t.inAmt)}</td><td class="num outC">${wonOrBlank(t.outAmt)}</td><td class="num hint">${won(t.bal)}</td><td>${esc(t.memo1)}</td><td>${esc(t.party)}</td><td>${esc(t.groupLabel || rowLabel(t))}</td><td class="hint">${esc(t.memo2)}</td></tr>`).join('')}
       </tbody></table></div>${list.length > 1000 ? '<p class="hint">화면에는 1,000건까지 보여요. 전체는 엑셀로 받으세요.</p>' : ''}`;
   }
   $('#txBody').innerHTML = html;
@@ -1166,8 +1229,8 @@ function renderUpload() {
       ${p.errors.length ? `<div class="warn">읽지 못한 파일: ${p.errors.map(esc).join(' / ')}</div>` : ''}
       <div class="chips"><span class="chip">전체 <b>${p.txs.length}</b>건</span><span class="chip">새 거래 <b>${p.newCount}</b>건</span><span class="chip">이미 있음 <b>${p.txs.length - p.newCount}</b>건</span><span class="chip">${p.min} ~ ${p.max}</span></div>
       ${p.unknown.length ? `<div class="warn">설정에 없는 계좌가 있어요: ${p.unknown.map(esc).join(', ')}. 저장은 되지만 일보에는 설정에서 계좌를 추가한 뒤 나타나요.</div>` : ''}
-      <div class="scroll"><table class="t"><thead><tr><th></th><th>거래일자</th><th>시간</th><th>계좌</th><th class="num">입금액</th><th class="num">출금액</th><th>적요1</th><th>의뢰인/수취인</th><th>자동 적용될 내역</th></tr></thead><tbody>
-      ${p.txs.slice(0, 60).map(t => `<tr><td>${p.newIds.has(t.id) ? '<span class="tag cash">새 거래</span>' : '<span class="tag">있음</span>'}</td><td>${t.date}</td><td>${esc(t.time)}</td><td>${esc(t.alias || t.acct6)}</td><td class="num inC">${wonOrBlank(t.inAmt)}</td><td class="num outC">${wonOrBlank(t.outAmt)}</td><td>${esc(t.memo1)}</td><td>${esc(t.party)}</td><td>${S.rules[ruleKey(t)] ? esc(S.rules[ruleKey(t)].label) : '<span class="hint">-</span>'}</td></tr>`).join('')}
+      <div class="scroll"><table class="t"><thead><tr><th></th><th>거래일자</th><th>시간</th><th>계좌</th><th class="num">입금액</th><th class="num">출금액</th><th>적요1</th><th>의뢰인/수취인</th><th>일보에 들어갈 내역</th></tr></thead><tbody>
+      ${p.txs.slice(0, 60).map(t => `<tr><td>${p.newIds.has(t.id) ? '<span class="tag cash">새 거래</span>' : '<span class="tag">있음</span>'}</td><td>${t.date}</td><td>${esc(t.time)}</td><td>${esc(accNameOf(t.acct6))}</td><td class="num inC">${wonOrBlank(t.inAmt)}</td><td class="num outC">${wonOrBlank(t.outAmt)}</td><td>${esc(t.memo1)}</td><td>${esc(t.party)}</td><td>${S.rules[ruleKey(t)] ? esc(ruleLabelFor(S.rules[ruleKey(t)], t)) : esc(autoLabel(t))}</td></tr>`).join('')}
       </tbody></table></div>${p.txs.length > 60 ? `<p class="hint">미리보기는 60건까지 보여요.</p>` : ''}
       <div class="row" style="margin-top:12px"><button class="btn primary" id="saveUp" ${p.newCount ? '' : 'disabled'}>새 거래 ${p.newCount}건 저장하기</button><button class="btn ghost" id="cancelUp">취소</button></div>` : ''}
   </div>
@@ -1224,7 +1287,7 @@ async function saveUpload() {
     const ref = db.collection('txns').doc(t.id), up = refs[t.fi];
     if (!p.newIds.has(t.id)) return b => b.update(ref, { uploadIds: firebase.firestore.FieldValue.arrayUnion(up.id) });
     const { id, fi, ...data } = t, rule = S.rules[ruleKey(t)];
-    return b => b.set(ref, { ...data, uploadIds: [up.id], label: rule ? rule.label : null, labelSrc: rule ? 'rule' : null, groupId: null, groupLabel: null, createdAt: TS(), by: S.user.email });
+    return b => b.set(ref, { ...data, uploadIds: [up.id], label: rule ? ruleLabelFor(rule, t) : null, labelSrc: rule ? 'rule' : null, groupId: null, groupLabel: null, createdAt: TS(), by: S.user.email });
   });
   await commitBatches(ops);
   await Promise.all(p.files.map((f, i) => {
@@ -1335,7 +1398,7 @@ async function renderSettings() {
     <div class="row" style="margin-bottom:12px"><input type="month" class="in" id="opYm" value="${ym}">
       <button class="btn sm" id="opPrev">전월 마감 잔액으로 채우기</button><button class="btn sm" id="opBank">은행 잔액 기준으로 채우기</button></div>
     <div class="grid-in" id="opForm">
-      ${S.accounts.map(a => `<label>${esc(a.short)}<input class="in" data-op="accts.${a.acct6}" value="${v((op.accts || {})[a.acct6])}"></label>`).join('')}
+      ${S.accounts.map(a => `<label>${esc(accName(a))}<input class="in" data-op="accts.${a.acct6}" value="${v((op.accts || {})[a.acct6])}"></label>`).join('')}
       <label>현금<input class="in" data-op="cash" value="${v(op.cash)}"></label>
       <label>채권 및 적금<input class="in" data-op="bond" value="${v(op.bond)}"></label>
       <label>대여금<input class="in" data-op="loan" value="${v(op.loan)}"></label>
@@ -1348,7 +1411,7 @@ async function renderSettings() {
   <div class="panel">
     <h2>카드 입금 자동 묶기</h2>
     <p class="hint">계좌별로 카드사·PG 입금을 찾아 한 줄로 묶어요. 일보에서 펼쳐서 확인하고, 아닌 건은 ‘빼기’로 뺄 수 있어요.</p>
-    <div id="agRules">${(S.autoGroups.rules || []).map(r => `<div class="row" style="margin-bottom:6px"><select class="in" data-ag="acct">${S.accounts.map(a => `<option value="${a.acct6}" ${a.acct6 === r.acct6 ? 'selected' : ''}>${esc(a.short)}</option>`).join('')}</select><input class="in" data-ag="name" style="flex:1;max-width:360px" value="${esc(r.name)}"><button class="btn ghost sm" data-agdel>삭제</button></div>`).join('')}</div>
+    <div id="agRules">${(S.autoGroups.rules || []).map(r => `<div class="row" style="margin-bottom:6px"><select class="in" data-ag="acct">${S.accounts.map(a => `<option value="${a.acct6}" ${a.acct6 === r.acct6 ? 'selected' : ''}>${esc(accName(a))}</option>`).join('')}</select><input class="in" data-ag="name" style="flex:1;max-width:360px" value="${esc(r.name)}"><button class="btn ghost sm" data-agdel>삭제</button></div>`).join('')}</div>
     <button class="btn sm" id="agAdd" style="margin:4px 0 14px">계좌 추가</button>
     <div class="grid-in" style="grid-template-columns:1fr">
       <label>카드사로 볼 이름 (뒤에 숫자가 붙는 경우, 쉼표로 구분)<input class="in" style="text-align:left" id="agPrefixes" value="${esc(S.autoGroups.prefixes)}"></label>
@@ -1369,14 +1432,14 @@ async function renderSettings() {
     <h2>자동 적용 규칙 <span class="hint">${ruleRows.length}개</span></h2>
     <p class="hint">일보에서 내역을 고치면 ‘적요1 + 의뢰인/수취인’ 조합으로 기억해 두었다가, 다음 업로드 때 같은 거래에 자동으로 넣어요.</p>
     ${ruleRows.length ? `<div class="scroll"><table class="t"><thead><tr><th>적요1</th><th>의뢰인/수취인</th><th>일보 내역</th><th></th></tr></thead><tbody>
-      ${ruleRows.map(([k, r]) => `<tr><td>${esc(r.memo1)}</td><td>${esc(r.party)}</td><td><input class="in" style="width:100%" data-rule="${k}" value="${esc(r.label)}"></td><td><button class="btn ghost sm" data-rdel="${k}">삭제</button></td></tr>`).join('')}
+      ${ruleRows.map(([k, r]) => `<tr><td>${esc(r.memo1)}</td><td>${esc(r.party)}</td><td><div class="row" style="flex-wrap:nowrap">${r.pfx ? '<span class="tag" title="계좌별 앞 글자가 자동으로 붙어요">사업장_</span>' : ''}<input class="in" style="width:100%" data-rule="${k}" value="${esc(r.label)}"></div></td><td><button class="btn ghost sm" data-rdel="${k}">삭제</button></td></tr>`).join('')}
       </tbody></table></div>` : '<p class="hint">아직 규칙이 없어요. 일보 화면에서 내역을 고치면 여기에 쌓여요.</p>'}
   </div>
 
   <div class="panel">
     <h2>계좌 목록</h2>
-    <p class="hint">계좌번호 끝 6자리로 업로드 내역과 연결돼요. 순서는 엑셀 예금 내역의 순서와 같아요.</p>
-    <div class="scroll"><table class="t" id="accTbl"><thead><tr><th>끝 6자리</th><th>과목</th><th>학원</th><th>일보 표기</th><th>은행</th><th>종류</th><th>계좌번호</th><th>짧은 이름</th><th>비고</th><th></th></tr></thead><tbody>
+    <p class="hint">계좌번호 끝 6자리로 업로드 내역과 연결돼요. 순서는 엑셀 예금 내역의 순서와 같아요. ‘내역 앞 글자’는 그 계좌 거래 내역 앞에 자동으로 붙어요 (예: 학원_정영희(씨엔엘)).</p>
+    <div class="scroll"><table class="t" id="accTbl"><thead><tr><th>끝 6자리</th><th>과목</th><th>학원</th><th>일보 표기</th><th>은행</th><th>종류</th><th>계좌번호</th><th>내역 앞 글자</th><th>비고</th><th></th></tr></thead><tbody>
       ${S.accounts.map((a, i) => accRowHtml(a, i)).join('')}
     </tbody></table></div>
     <div class="row" style="margin-top:10px"><button class="btn sm" id="accAdd">계좌 추가</button><button class="btn primary" id="accSave">계좌 목록 저장하기</button></div>
@@ -1396,7 +1459,7 @@ async function renderSettings() {
   </div>`;
 
   $('#opYm').onchange = e => { S.openYm = e.target.value; renderSettings(); };
-  $('#agAdd').onclick = () => $('#agRules').insertAdjacentHTML('beforeend', `<div class="row" style="margin-bottom:6px"><select class="in" data-ag="acct">${S.accounts.map(a => `<option value="${a.acct6}">${esc(a.short)}</option>`).join('')}</select><input class="in" data-ag="name" style="flex:1;max-width:360px" placeholder="묶음 이름"><button class="btn ghost sm" data-agdel>삭제</button></div>`);
+  $('#agAdd').onclick = () => $('#agRules').insertAdjacentHTML('beforeend', `<div class="row" style="margin-bottom:6px"><select class="in" data-ag="acct">${S.accounts.map(a => `<option value="${a.acct6}">${esc(accName(a))}</option>`).join('')}</select><input class="in" data-ag="name" style="flex:1;max-width:360px" placeholder="묶음 이름"><button class="btn ghost sm" data-agdel>삭제</button></div>`);
   $('#agRules').onclick = e => { if (e.target.closest('[data-agdel]')) e.target.closest('.row').remove(); };
   $('#agSave').onclick = () => busy(async () => {
     const rules = [...$('#agRules').querySelectorAll('.row')].map(r => ({ acct6: r.querySelector('[data-ag=acct]').value, name: r.querySelector('[data-ag=name]').value.trim() })).filter(r => r.name);
@@ -1458,7 +1521,7 @@ async function renderSettings() {
       const o = {}; tr.querySelectorAll('[data-a]').forEach(i => o[i.dataset.a] = i.value.trim()); o.acct6 = acct6(o.acct6); return o;
     }).filter(a => a.acct6.length === 6);
     if (new Set(list.map(a => a.acct6)).size !== list.length) throw new Error('끝 6자리가 같은 계좌가 있어요');
-    list.forEach(a => { if (!a.short) a.short = a.bank.slice(0, 2) + a.acct6.slice(-3); });
+    list.forEach(a => { const old = S.accounts.find(x => x.acct6 === a.acct6); if (old && old.short) a.short = old.short; });
     await db.collection('settings').doc('accounts').set({ list, updatedAt: TS(), by: S.user.email });
     S.accounts = list; toast('계좌 목록을 저장했어요'); renderSettings();
   });
@@ -1474,7 +1537,7 @@ async function renderSettings() {
 function accRowHtml(a, i) {
   const f = (k, w) => `<input class="in" data-a="${k}" style="width:${w}px" value="${esc(a[k] || '')}">`;
   return `<tr><td>${f('acct6', 80)}</td><td><select class="in" data-a="subject"><option ${a.subject === '보통예금' ? 'selected' : ''}>보통예금</option><option ${a.subject === '기타제예금' ? 'selected' : ''}>기타제예금</option></select></td>
-    <td>${f('school', 110)}</td><td>${f('disp', 180)}</td><td>${f('bank', 90)}</td><td>${f('kind', 80)}</td><td>${f('no', 150)}</td><td>${f('short', 90)}</td><td>${f('note', 130)}</td><td><button class="btn ghost sm" data-adel="${i}">빼기</button></td></tr>`;
+    <td>${f('school', 110)}</td><td>${f('disp', 180)}</td><td>${f('bank', 90)}</td><td>${f('kind', 80)}</td><td>${f('no', 150)}</td><td><input class="in" data-a="prefix" style="width:90px" value="${esc(prefixOfAcc(a))}" placeholder="없음"></td><td>${f('note', 130)}</td><td><button class="btn ghost sm" data-adel="${i}">빼기</button></td></tr>`;
 }
 </script>
 <script>
