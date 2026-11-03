@@ -113,7 +113,36 @@ details.extra summary{cursor:pointer;font-weight:600;padding:4px 0}
 .grid-in label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted)}
 .grid-in input{text-align:right}
 
-.drop{border:2px dashed var(--line);border-radius:12px;padding:36px;text-align:center;background:#FBFCFC;cursor:pointer}
+.drop{display:block;border:2px dashed var(--line);border-radius:12px;padding:40px 20px;text-align:center;background:#FBFCFC;cursor:pointer;margin:14px 0}
+.drop b{display:block;font-size:15px;margin-bottom:4px}
+.filechips{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
+.mpanel h2{display:flex;align-items:center;gap:10px}
+.mlist{width:100%;border-collapse:collapse;margin-bottom:12px}
+.mlist td{padding:6px 8px;border-bottom:1px solid var(--line2);vertical-align:middle}
+.mlist td.item{white-space:nowrap;color:var(--muted);font-size:13px;width:1%}
+.mlist input{width:100%}
+.mlist td.amt{width:150px}
+.madd{display:grid;grid-template-columns:minmax(180px,240px) auto 140px 1fr auto;gap:8px;align-items:center;background:var(--teal-soft);border-radius:10px;padding:10px}
+.madd .acct[hidden]{display:none}
+@media (max-width:760px){.madd{grid-template-columns:1fr 1fr}}
+.modal-bg{position:fixed;inset:0;background:rgba(27,41,40,.35);display:grid;place-items:center;z-index:60;padding:16px}
+.modal{background:#fff;border-radius:14px;padding:22px;width:min(460px,100%);box-shadow:0 12px 40px rgba(0,0,0,.18)}
+.modal h3{margin:0 0 12px;font-size:16px}
+.people{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:12px 20px;margin-bottom:18px}
+.people.todo{background:var(--gold-soft);border-color:#E8DA9A}
+.people b{font-size:15px}
+.people label{display:flex;align-items:center;gap:6px}
+.people input{width:80px;text-align:right}
+.people .todo-msg{color:var(--gold-deep);font-weight:600;font-size:13px}
+.entry.auto{background:#FAFCFC}
+.entry.auto.checked{background:#F3FAF9}
+.members .mrow{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:2px 0}
+.members .mrow .btn{padding:0 8px}
+.checked-badge{color:var(--teal-deep);font-weight:700}
+.recheck{color:var(--gold-deep);font-weight:600}
+.presets{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.presets button{border:1px solid var(--teal);background:#fff;color:var(--teal-deep);border-radius:99px;padding:5px 12px;cursor:pointer}
+.presets button:hover{background:var(--teal-soft)}
 .drop.over{border-color:var(--teal);background:var(--teal-soft)}
 .chips{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
 .chip{background:var(--line2);border-radius:99px;padding:4px 12px;font-size:12.5px}
@@ -215,6 +244,21 @@ const DEFAULT_ACCOUNTS = [
   { acct6: '566225', subject: '보통예금', school: '양양DS연수원', disp: '국민(230101-04-566225)', bank: '국민은행', kind: '기업자유', no: '230101-04-566225', note: '2022-9-14 개설', short: '양양225' }
 ];
 const DEFAULT_BORROW = [{ name: '한국산업은행', rate: 0, note: '' }, { name: '단우개발㈜', rate: 0.046, note: '' }];
+const DEFAULT_AUTOGROUPS = {
+  rules: [{ acct6: '127766', name: '학원_수강료 매출 예입' }, { acct6: '005262', name: '퀀텀1_매출 예입' }, { acct6: '005275', name: '퀀텀2_매출 예입' }],
+  prefixes: 'KB, 국민, BC, 비씨, 신한, 하나, 우리, 우, 삼성, 현대, 현, 롯데, 농협, NH, 씨티, 광주, 전북, 수협',
+  contains: '케이씨피, KCP',
+  memoKeys: '가맹입금'
+};
+const splitList = s => String(s || '').split(/\s*,\s*/).map(x => x.trim()).filter(Boolean);
+function isCardTx(t, cfg) {
+  if (!(num(t.inAmt) > 0)) return false;
+  const party = String(t.party || '').normalize('NFKC').replace(/\s/g, '');
+  const memo = `${t.memo || ''} ${t.memo1 || ''} ${t.memo2 || ''}`.normalize('NFKC');
+  if (splitList(cfg.memoKeys).some(k => memo.includes(k))) return true;
+  if (splitList(cfg.contains).some(k => party.toUpperCase().includes(k.toUpperCase()))) return true;
+  return splitList(cfg.prefixes).some(k => party.toUpperCase().startsWith(k.toUpperCase()) && /^(카드)?[-\s]?\d{5,}/.test(party.slice(k.length)));
+}
 const DEFAULT_EXTRA = { bondName: '국민(051237-04-001609)', bondNote: '', loanName: '국민(051237-04-001609)', loanNote: '' };
 const SALES_ROWS = [['acad', '학원'], ['q1', '퀀텀1'], ['q2', '퀀텀2']];
 const BANK_COLS = ['사업장', '금융기관', '계좌번호', '계좌별칭', '거래일자', '거래시간', '입금액', '출금액', '잔액', '일자잔액', '기간잔액', '적요', '적요1', '적요2', '취급점', '의뢰인/수취인', '비고'];
@@ -554,8 +598,10 @@ if (!firebaseConfig.apiKey) {
 }
 
 async function loadSettings() {
-  const docs = await Promise.all(['accounts', 'borrow', 'extra'].map(k => db.collection('settings').doc(k).get()));
-  const [a, b, e] = docs.map(d => d.exists ? d.data() : null);
+  const docs = await Promise.all(['accounts', 'borrow', 'extra', 'groupNames', 'autoGroups'].map(k => db.collection('settings').doc(k).get()));
+  const [a, b, e, gn, ag] = docs.map(d => d.exists ? d.data() : null);
+  S.autoGroups = Object.assign(clone(DEFAULT_AUTOGROUPS), ag || {});
+  S.groupNames = gn && gn.list ? gn.list : [];
   S.accounts = a && a.list && a.list.length ? a.list : clone(DEFAULT_ACCOUNTS);
   S.borrow = b && b.list ? b.list : clone(DEFAULT_BORROW);
   S.extra = Object.assign(clone(DEFAULT_EXTRA), e || {});
@@ -593,11 +639,16 @@ function dayFlows(ym, date) {
     for (const [dir, amt, rows, bucket] of [['in', num(t.inAmt), inRows, acctIn], ['out', num(t.outAmt), outRows, acctOut]]) {
       if (!amt) continue;
       bucket[t.acct6] = (bucket[t.acct6] || 0) + amt;
-      if (t.groupId) {
+      const ar = dir === 'in' && !t.groupId && !t.autoOut ? (S.autoGroups.rules || []).find(x => x.acct6 === t.acct6) : null;
+      if (ar && isCardTx(t, S.autoGroups)) {
+        const k = 'auto:' + t.acct6;
+        if (!groups[k]) { groups[k] = { dir, subject: a.subject, label: ar.name, acct6: t.acct6, amt: 0, ord: order.get(t.acct6), time: t.time, members: [], autoKey: k }; rows.push(groups[k]); }
+        groups[k].amt += amt; groups[k].members.push(t);
+      } else if (t.groupId) {
         const k = dir + t.groupId;
         if (!groups[k]) { groups[k] = { dir, subject: a.subject, label: t.groupLabel || rowLabel(t), acct6: t.acct6, amt: 0, ord: order.get(t.acct6), time: t.time, members: [], groupId: t.groupId }; rows.push(groups[k]); }
         groups[k].amt += amt; groups[k].members.push(t);
-      } else rows.push({ dir, subject: a.subject, label: rowLabel(t), acct6: t.acct6, amt, ord: order.get(t.acct6), time: t.time, members: [t] });
+      } else rows.push({ dir, subject: a.subject, label: rowLabel(t), acct6: t.acct6, amt, ord: order.get(t.acct6), time: t.time, members: [t], pulledOut: !!t.autoOut });
     }
   }
   for (const [dir, list, rows, bucket] of [['in', man.inRows || [], inRows, acctIn], ['out', man.outRows || [], outRows, acctOut]]) {
@@ -611,7 +662,14 @@ function dayFlows(ym, date) {
   }
   const sorter = (a, b) => a.ord - b.ord || String(a.time).localeCompare(String(b.time));
   inRows.sort(sorter); outRows.sort(sorter);
-  return { acctIn, acctOut, cashIn, cashOut, inRows, outRows, sales: man.sales || {}, people: man.people || {}, bond: man.bond || {}, loan: man.loan || {}, borrow: man.borrow || {}, txs };
+  const ex = { sales: clone(man.sales || {}), people: clone(man.people || {}), bond: clone(man.bond || {}), loan: clone(man.loan || {}), borrow: clone(man.borrow || {}) };
+  (man.entries || []).forEach(en => {
+    const [top, ...rest] = en.key.split('.'), keys = rest.map(decodeURIComponent);
+    let o = ex[top]; if (!o) return;
+    keys.slice(0, -1).forEach(k => o = o[k] = o[k] || {});
+    const last = keys[keys.length - 1]; o[last] = num(o[last]) + num(en.amt);
+  });
+  return { acctIn, acctOut, cashIn, cashOut, inRows, outRows, ...ex, txs, man };
 }
 
 function timeline(ym) {
@@ -680,6 +738,7 @@ async function renderDay() {
     <button class="btn" data-act="dl-day">이 날짜 엑셀 받기</button>
   </div>
   ${!tl.hasOpening ? `<div class="warn">${ym.replace('-', '년 ')}월 월초 이월잔액이 아직 없어요. 전일이월이 0원으로 계산됩니다. <button class="btn sm" data-act="go-open">이월잔액 설정하기</button></div>` : ''}
+  ${peopleHtml(f, op)}
   <div class="book">
     <div class="book-top"><div><b>계좌별 잔액</b><div class="hint">차일이월과 은행 잔액(그날 마지막 거래 기준)을 비교해요.</div></div>${stamp}</div>
     <div class="scroll"><table class="t">
@@ -694,22 +753,16 @@ async function renderDay() {
     ${ledgerHtml('in', f.inRows, am)}
     ${ledgerHtml('out', f.outRows, am)}
   </div>
-  <div class="panel" style="margin-top:18px">${extraHtml(f, op)}</div>`;
+  <div class="panel" style="margin-top:18px">${manualPanelHtml(f, op)}</div>
+  <datalist id="labelHints">${labelHints().map(x => `<option value="${esc(x)}">`).join('')}</datalist>`;
 }
 
 function ledgerHtml(dir, rows, am) {
   const total = rows.reduce((s, r) => s + r.amt, 0);
-  const body = rows.length ? rows.map(r => entryHtml(r, am)).join('') : `<div class="empty">${dir === 'in' ? '입금' : '출금'} 내역이 없어요. 수시입출 내역을 업로드하거나 아래에서 직접 추가하세요.</div>`;
-  const opts = `<option value="cash">현금</option>` + S.accounts.map(a => `<option value="${a.acct6}">${esc(a.short || a.acct6)}</option>`).join('');
+  const body = rows.length ? rows.map(r => entryHtml(r, am)).join('') : `<div class="empty">${dir === 'in' ? '입금' : '출금'} 내역이 없어요. 수시입출 내역을 업로드하거나 아래 ‘직접 입력’에서 추가하세요.</div>`;
   return `<div class="ledger ${dir}">
     <div class="ledger-h"><b>${dir === 'in' ? '입금 내역' : '출금 내역'}</b><span class="num ${dir === 'in' ? 'inC' : 'outC'}">${won(total)}</span></div>
     ${body}
-    <div class="manualform" data-dir="${dir}">
-      <select class="in" data-k="acct">${opts}</select>
-      <input class="in" data-k="label" placeholder="내역 (예: 학원_9월 시감료)">
-      <input class="in num" data-k="amt" inputmode="numeric" placeholder="금액">
-      <button class="btn sm" data-act="add-manual" data-dir="${dir}">직접 추가</button>
-    </div>
   </div>`;
 }
 
@@ -719,56 +772,115 @@ function entryHtml(r, am) {
   if (r.manual) {
     return `<div class="entry"><span></span>
       <div class="meta">${tag}<span class="src manual">직접 입력</span></div>
-      <div class="lbl"><input data-act="m-label" data-dir="${r.dir}" data-id="${r.manual.id}" value="${esc(r.label)}"></div>
+      <div class="lbl"><input list="labelHints" data-act="m-label" data-dir="${r.dir}" data-id="${r.manual.id}" value="${esc(r.label)}"></div>
       <div class="row"><input class="in num" style="width:120px" data-act="m-amt" data-dir="${r.dir}" data-id="${r.manual.id}" value="${won(r.amt)}"><button class="btn ghost sm" data-act="m-del" data-dir="${r.dir}" data-id="${r.manual.id}" aria-label="삭제">삭제</button></div>
+    </div>`;
+  }
+  if (r.autoKey) {
+    const man = (S.months[ymOf(S.date)].manual[S.date] || {}), chk = (man.autoChecks || {})[r.acct6];
+    const valid = chk && chk.count === r.members.length && chk.sum === r.amt;
+    const stale = chk && !valid;
+    const opened = !valid || S.open.has(r.autoKey);
+    const who = chk ? String(chk.by || '').split('@')[0] : '', when = chk && chk.at ? new Date(chk.at).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+    return `<div class="entry auto ${valid ? 'checked' : ''}"><span></span>
+      <div class="meta">${tag}<span class="src rule">카드 입금 자동 묶음 ${r.members.length}건</span>
+        ${valid ? `<span class="checked-badge">✓ 확인함 · ${esc(who)} · ${esc(when)}</span><button class="btn ghost sm" data-act="atoggle" data-key="${r.autoKey}">${opened ? '접기' : '펼쳐 보기'}</button><button class="btn ghost sm" data-act="auncheck" data-acct="${r.acct6}">확인 취소</button>`
+               : `${stale ? '<span class="recheck">확인 후 내역이 바뀌어 다시 확인이 필요해요</span>' : ''}<button class="btn sm primary" data-act="acheck" data-acct="${r.acct6}" data-count="${r.members.length}" data-sum="${r.amt}">확인</button>`}</div>
+      <div class="lbl"><b>${esc(r.label)}</b></div>
+      <div class="amt">${won(r.amt)}</div>
+      ${opened ? `<div class="members">${r.members.map(t => `<div class="mrow"><span>${esc(t.time)} · ${esc(t.party || t.memo1)}${t.memo ? ` <span class="hint">(${esc(t.memo)})</span>` : ''}</span><span class="row"><span class="num">${won(t.inAmt)}</span><button class="btn ghost sm" data-act="aout" data-id="${t.id}">빼기</button></span></div>`).join('')}</div>` : ''}
     </div>`;
   }
   if (r.groupId) {
     const opened = S.open.has(r.groupId);
     return `<div class="entry group"><span></span>
       <div class="meta">${tag}<span class="src rule">${r.members.length}건 묶음</span><button class="btn ghost sm" data-act="toggle" data-gid="${r.groupId}">${opened ? '접기' : '펼치기'}</button><button class="btn ghost sm" data-act="ungroup" data-gid="${r.groupId}">묶기 해제</button></div>
-      <div class="lbl"><input data-act="g-label" data-gid="${r.groupId}" value="${esc(r.label)}" class="edited"></div>
+      <div class="lbl"><input list="labelHints" data-act="g-label" data-gid="${r.groupId}" value="${esc(r.label)}" class="edited"></div>
       <div class="amt">${won(r.amt)}</div>
       ${opened ? `<div class="members">${r.members.map(t => `<div><span>${esc(t.time)} · ${esc(defaultLabel(t))}</span><span class="num">${won(r.dir === 'in' ? t.inAmt : t.outAmt)}</span></div>`).join('')}</div>` : ''}
     </div>`;
   }
   const t = r.members[0], sel = S.sel.has(t.id);
-  const src = t.labelSrc === 'manual' ? '<span class="src manual">직접 수정</span>' : t.labelSrc === 'rule' ? '<span class="src rule">자동 적용</span>' : '';
+  const src = (r.pulledOut ? '<span class="src manual">자동 묶음에서 뺌</span> <button class="btn ghost sm" data-act="ain" data-id="' + t.id + '">다시 넣기</button>' : '') + (t.labelSrc === 'manual' ? '<span class="src manual">직접 수정</span>' : t.labelSrc === 'rule' ? '<span class="src rule">자동 적용</span>' : '');
   return `<div class="entry ${sel ? 'sel' : ''}">
     <input type="checkbox" data-act="sel" data-id="${t.id}" ${sel ? 'checked' : ''} aria-label="선택">
     <div class="meta">${tag}<span>${esc(t.time)}</span><span>적요1: ${esc(t.memo1 || t.memo)}</span><span>의뢰인/수취인: ${esc(t.party)}</span>${src}</div>
-    <div class="lbl"><input data-act="label" data-id="${t.id}" value="${esc(r.label)}" class="${t.label ? 'edited' : ''}" title="원래 값: ${esc(defaultLabel(t))}"></div>
+    <div class="lbl"><input list="labelHints" data-act="label" data-id="${t.id}" value="${esc(r.label)}" class="${t.label ? 'edited' : ''}" title="원래 값: ${esc(defaultLabel(t))}"></div>
     <div class="amt">${won(r.amt)}</div>
   </div>`;
 }
 
-function extraHtml(f, op) {
-  const v = x => wonOrBlank(x);
-  const sales = SALES_ROWS.map(([k, label]) => {
-    const s = f.sales[k] || {};
-    return `<label>${label} 현금<input class="in" data-act="x" data-path="sales.${k}.cash" value="${v(s.cash)}"></label>
-      <label>${label} 예금<input class="in" data-act="x" data-path="sales.${k}.dep" value="${v(s.dep)}"></label>
-      <label>${label} 카드<input class="in" data-act="x" data-path="sales.${k}.card" value="${v(s.card)}"></label>`;
-  }).join('');
-  const bor = S.borrow.map(b => {
-    const io = f.borrow[b.name] || {}, k = encodeURIComponent(b.name);
-    return `<label>${esc(b.name)} 차입<input class="in" data-act="x" data-path="borrow.${k}.in" value="${v(io.in)}"></label>
-      <label>${esc(b.name)} 상환<input class="in" data-act="x" data-path="borrow.${k}.repay" value="${v(io.repay)}"></label>
-      <label>${esc(b.name)} 이자<input class="in" data-act="x" data-path="borrow.${k}.interest" value="${v(io.interest)}"></label>`;
-  }).join('');
-  return `<details class="extra"><summary>은행 내역 외 직접 입력 항목 (매출·인원·채권·대여금·차입금)</summary>
-    <p class="hint">입력하면 바로 저장되고, 엑셀 일보의 같은 칸에 들어가요. 인원 전일누계는 설정의 월초 값부터 자동으로 이어집니다 (오늘 전일누계 ${won(op.people)}명).</p>
-    <h3>당일 매출</h3><div class="grid-in">${sales}</div>
-    <h3>인원</h3><div class="grid-in">
-      <label>등록<input class="in" data-act="x" data-path="people.reg" value="${v(f.people.reg)}"></label>
-      <label>환불<input class="in" data-act="x" data-path="people.refund" value="${v(f.people.refund)}"></label></div>
-    <h3>채권·대여금</h3><div class="grid-in">
-      <label>채권 및 적금 입금<input class="in" data-act="x" data-path="bond.in" value="${v(f.bond.in)}"></label>
-      <label>채권 및 적금 출금<input class="in" data-act="x" data-path="bond.out" value="${v(f.bond.out)}"></label>
-      <label>대여금 입금<input class="in" data-act="x" data-path="loan.in" value="${v(f.loan.in)}"></label>
-      <label>대여금 출금<input class="in" data-act="x" data-path="loan.out" value="${v(f.loan.out)}"></label></div>
-    <h3>차입금</h3><div class="grid-in">${bor}</div>
-  </details>`;
+/* 오늘 인원 */
+function peopleHtml(f, op) {
+  const p = (f.man || {}).people || {}, entered = p.reg !== undefined || p.refund !== undefined;
+  const reg = num(f.people.reg), ref = num(f.people.refund), val = x => x === undefined || x === null ? '' : String(x);
+  return `<div class="people ${entered ? '' : 'todo'}">
+    <b>오늘 인원</b>
+    <span>전일누계 <b>${won(op.people)}</b>명</span>
+    <label>등록 <input class="in" inputmode="numeric" data-act="ppl" data-k="reg" value="${val(p.reg)}" placeholder="0">명</label>
+    <label>환불 <input class="in" inputmode="numeric" data-act="ppl" data-k="refund" value="${val(p.refund)}" placeholder="0">명</label>
+    <span>→ 누계 <b>${won(num(op.people) + reg - ref)}</b>명</span>
+    ${entered ? '' : '<span class="todo-msg">아직 입력하지 않았어요 · 변동이 없으면 0을 넣어 주세요</span>'}
+  </div>`;
+}
+/* 예전에 쓴 내역 이름 (자동 추천) */
+function labelHints() {
+  const s = new Set();
+  Object.values(S.rules).forEach(r => r.label && s.add(r.label));
+  (S.groupNames || []).forEach(x => s.add(x));
+  (S.autoGroups.rules || []).forEach(r => r.name && s.add(r.name));
+  Object.values(S.months).forEach(m => {
+    m.txns.forEach(t => { if (t.label) s.add(t.label); if (t.groupLabel) s.add(t.groupLabel); });
+    Object.values(m.manual).forEach(d => ['inRows', 'outRows', 'entries'].forEach(k => (d[k] || []).forEach(r => r.label && s.add(r.label))));
+  });
+  return [...s].sort((a, b) => a.localeCompare(b)).slice(0, 800);
+}
+
+/* 직접 입력 항목 목록 */
+function manualItems() {
+  const g = [
+    ['현금·계좌', [['cashIn', '현금입금'], ['cashOut', '현금출금'], ['acctIn', '계좌입금 (은행 내역 없는 계좌)'], ['acctOut', '계좌출금 (은행 내역 없는 계좌)']]],
+    ['매출', SALES_ROWS.flatMap(([k, l]) => [['cash', '현금'], ['dep', '예금'], ['card', '카드']].map(([x, xl]) => [`sales.${k}.${x}`, `매출 · ${l} · ${xl}`]))],
+    ['채권·대여금', [['bond.in', '채권 및 적금 · 입금'], ['bond.out', '채권 및 적금 · 출금'], ['loan.in', '대여금 · 입금'], ['loan.out', '대여금 · 출금']]],
+    ['차입금', S.borrow.flatMap(b => { const k = encodeURIComponent(b.name); return [[`borrow.${k}.in`, `차입금 · ${b.name} · 차입`], [`borrow.${k}.repay`, `차입금 · ${b.name} · 상환`], [`borrow.${k}.interest`, `차입금 · ${b.name} · 이자`]]; })]
+  ];
+  return g;
+}
+const itemLabel = key => { if (key === 'people.reg') return '인원 · 등록'; if (key === 'people.refund') return '인원 · 환불'; for (const [, list] of manualItems()) for (const [k, l] of list) if (k === key) return l; return key; };
+
+function manualPanelHtml(f, op) {
+  const man = f.man || {}, am = accMap(), v = x => wonOrBlank(x);
+  const rows = [];
+  (man.inRows || []).forEach(r => rows.push({ kind: 'in', r, item: r.acct6 === 'cash' || !am.has(r.acct6) ? '현금입금' : `계좌입금 · ${(am.get(r.acct6) || {}).short || r.acct6}` }));
+  (man.outRows || []).forEach(r => rows.push({ kind: 'out', r, item: r.acct6 === 'cash' || !am.has(r.acct6) ? '현금출금' : `계좌출금 · ${(am.get(r.acct6) || {}).short || r.acct6}` }));
+  (man.entries || []).forEach(r => rows.push({ kind: 'entry', r, item: itemLabel(r.key) }));
+  // 이전 방식으로 입력한 값 (칸 입력)
+  const legacy = [];
+  const walk = (obj, path) => Object.entries(obj || {}).forEach(([k, val]) => { if (val && typeof val === 'object') walk(val, [...path, k]); else if (num(val)) legacy.push({ key: [path[0], ...path.slice(1).map(encodeURIComponent), encodeURIComponent(k)].join('.'), amt: num(val) }); });
+  ['sales', 'bond', 'loan', 'borrow'].forEach(t => walk(man[t], [t]));
+  const isPeople = k => String(k).startsWith('people.');
+  const list = rows.map(({ kind, r, item }) => {
+    const amtAttr = kind === 'entry' ? `data-act="e-amt" data-id="${r.id}"` : `data-act="m-amt" data-dir="${kind}" data-id="${r.id}"`;
+    const lblAttr = kind === 'entry' ? `data-act="e-label" data-id="${r.id}"` : `data-act="m-label" data-dir="${kind}" data-id="${r.id}"`;
+    const delAttr = kind === 'entry' ? `data-act="e-del" data-id="${r.id}"` : `data-act="m-del" data-dir="${kind}" data-id="${r.id}"`;
+    return `<tr><td class="item">${esc(item)}</td><td><input class="in" list="labelHints" ${lblAttr} value="${esc(r.label || '')}" placeholder="내역"></td>
+      <td class="amt"><input class="in num" ${amtAttr} value="${v(r.amt)}"></td><td><button class="btn ghost sm" ${delAttr}>삭제</button></td></tr>`;
+  }).concat(legacy.map(l => `<tr><td class="item">${esc(itemLabel(l.key))}</td><td class="hint">이전 방식으로 입력한 값</td><td class="amt num">${won(l.amt)}${isPeople(l.key) ? '명' : ''}</td><td><button class="btn ghost sm" data-act="legacy-del" data-key="${l.key}">삭제</button></td></tr>`)).join('');
+  const sel = S.mItem || 'cashIn';
+  const opts = manualItems().map(([g, items]) => `<optgroup label="${esc(g)}">${items.map(([k, l]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${esc(l)}</option>`).join('')}</optgroup>`).join('');
+  const acctOpts = S.accounts.map(a => `<option value="${a.acct6}" ${S.mAcct === a.acct6 ? 'selected' : ''}>${esc(a.short || a.acct6)}</option>`).join('');
+  const needAcct = sel === 'acctIn' || sel === 'acctOut';
+  return `<div class="mpanel">
+    <h2>직접 입력 <span class="hint" style="font-weight:400">현금·매출·채권처럼 은행 내역에 없는 항목</span></h2>
+    ${rows.length || legacy.length ? `<div class="scroll"><table class="mlist"><tbody>${list}</tbody></table></div>` : '<p class="hint">아직 직접 입력한 항목이 없어요.</p>'}
+    <div class="madd">
+      <select class="in" id="mItem" aria-label="항목">${opts}</select>
+      <select class="in acct" id="mAcct" aria-label="계좌" ${needAcct ? '' : 'hidden'}>${acctOpts}</select>
+      <input class="in num" id="mAmt" inputmode="numeric" placeholder="${isPeople(sel) ? '인원(명)' : '금액'}" aria-label="금액">
+      <input class="in" id="mLabel" list="labelHints" placeholder="내역 (예: 학원_10월 시감료)" aria-label="내역">
+      <button class="btn primary" data-act="m-add">추가</button>
+    </div>
+  </div>`;
 }
 
 // 일보 화면 이벤트
@@ -784,8 +896,14 @@ dayEl.addEventListener('click', async e => {
   else if (act === 'group') groupSelected();
   else if (act === 'toggle') { const g = b.dataset.gid; S.open.has(g) ? S.open.delete(g) : S.open.add(g); renderDay(); }
   else if (act === 'ungroup') ungroup(b.dataset.gid);
-  else if (act === 'add-manual') addManual(b.closest('.manualform'));
+  else if (act === 'm-add') addManualEntry();
+  else if (act === 'atoggle') { const k = b.dataset.key; S.open.has(k) ? S.open.delete(k) : S.open.add(k); renderDay(); }
+  else if (act === 'acheck') setAutoCheck(b.dataset.acct, { by: S.user.email, at: Date.now(), count: +b.dataset.count, sum: +b.dataset.sum });
+  else if (act === 'auncheck') setAutoCheck(b.dataset.acct, null);
+  else if (act === 'aout' || act === 'ain') busy(async () => { const t = findTx(b.dataset.id); const v = act === 'aout'; await db.collection('txns').doc(t.id).update({ autoOut: v }); t.autoOut = v; toast(v ? '묶음에서 뺐어요' : '묶음에 다시 넣었어요'); renderDay(); });
   else if (act === 'm-del') updateManual(b.dataset.dir, b.dataset.id, null);
+  else if (act === 'e-del') updateEntry(b.dataset.id, null);
+  else if (act === 'legacy-del') { if (confirm('이 값을 삭제할까요?')) saveExtra(b.dataset.key, 0).then(renderDay); }
 });
 dayEl.addEventListener('change', async e => {
   const t = e.target, act = t.dataset.act; if (!act) return;
@@ -796,9 +914,15 @@ dayEl.addEventListener('change', async e => {
   else if (act === 'g-label') saveGroupLabel(t.dataset.gid, t.value);
   else if (act === 'm-label') updateManual(t.dataset.dir, t.dataset.id, { label: t.value.trim() });
   else if (act === 'm-amt') updateManual(t.dataset.dir, t.dataset.id, { amt: num(t.value) });
-  else if (act === 'x') saveExtra(t.dataset.path, num(t.value));
+  else if (act === 'ppl') savePeople(t.dataset.k, t.value);
+  else if (act === 'e-label') updateEntry(t.dataset.id, { label: t.value.trim() });
+  else if (act === 'e-amt') updateEntry(t.dataset.id, { amt: num(t.value) });
+  else if (t.id === 'mItem') { S.mItem = t.value; const need = t.value === 'acctIn' || t.value === 'acctOut'; $('#mAcct').hidden = !need; $('#mAmt').placeholder = t.value.startsWith('people.') ? '인원(명)' : '금액'; }
+  else if (t.id === 'mAcct') S.mAcct = t.value;
 });
+dayEl.addEventListener('change', e => { const t = e.target; if (t.id === 'mItem') { S.mItem = t.value; const need = t.value === 'acctIn' || t.value === 'acctOut'; $('#mAcct').hidden = !need; $('#mAmt').placeholder = t.value.startsWith('people.') ? '인원(명)' : '금액'; } else if (t.id === 'mAcct') S.mAcct = t.value; });
 dayEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && (e.target.id === 'mLabel' || e.target.id === 'mAmt')) { e.preventDefault(); return addManualEntry(); }
   if (e.key !== 'Enter' || !e.target.matches('.lbl input')) return;
   e.preventDefault();
   const all = [...dayEl.querySelectorAll('.lbl input')], i = all.indexOf(e.target);
@@ -842,12 +966,36 @@ async function groupSelected() {
   const same = k => ts.every(t => t[k] === ts[0][k]);
   const dirOf = t => num(t.inAmt) ? 'in' : 'out';
   if (!same('acct6') || !same('date') || !ts.every(t => dirOf(t) === dirOf(ts[0]))) return toast('같은 날짜·같은 계좌·같은 방향(입금 또는 출금)끼리만 묶을 수 있어요');
-  const label = prompt('묶은 내역의 이름을 입력하세요', rowLabel(ts[0]));
+  const label = await pickGroupName(rowLabel(ts[0]), ts.length, ts.reduce((s, t) => s + num(t.inAmt) + num(t.outAmt), 0));
   if (label === null) return;
   const gid = 'g' + Date.now().toString(36);
   await busy(() => commitBatches(ts.map(t => b => b.update(db.collection('txns').doc(t.id), { groupId: gid, groupLabel: label.trim() || rowLabel(ts[0]) }))));
   ts.forEach(t => { t.groupId = gid; t.groupLabel = label.trim() || rowLabel(ts[0]); });
   S.sel.clear(); toast(`${ts.length}건을 한 줄로 묶었어요`); renderDay();
+}
+function pickGroupName(def, n, sum) {
+  return new Promise(resolve => {
+    const bg = document.createElement('div'); bg.className = 'modal-bg';
+    bg.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-label="묶기 이름">
+      <h3>${n}건 · ${won(sum)}원 묶기</h3>
+      ${S.groupNames.length ? `<p class="hint" style="margin:0 0 6px">자주 쓰는 이름을 누르면 바로 묶여요</p><div class="presets">${S.groupNames.map(g => `<button data-g="${esc(g)}">${esc(g)}</button>`).join('')}</div>` : '<p class="hint">설정에서 자주 쓰는 이름을 등록하면 여기 버튼으로 나와요.</p>'}
+      <input class="in" id="gnInput" list="labelHints" style="width:100%" value="${esc(def)}" placeholder="묶은 내역 이름">
+      <label class="row hint" style="margin:10px 0"><input type="checkbox" id="gnSave"> 자주 쓰는 이름에 저장</label>
+      <div class="row" style="justify-content:flex-end"><button class="btn ghost" id="gnCancel">취소</button><button class="btn primary" id="gnOk">묶기</button></div></div>`;
+    document.body.appendChild(bg);
+    const inp = bg.querySelector('#gnInput'); inp.focus(); inp.select();
+    const done = v => { bg.remove(); resolve(v); };
+    bg.querySelectorAll('[data-g]').forEach(b => b.onclick = () => done(b.dataset.g));
+    bg.querySelector('#gnCancel').onclick = () => done(null);
+    bg.onclick = e => { if (e.target === bg) done(null); };
+    const ok = async () => {
+      const v = inp.value.trim(); if (!v) return inp.focus();
+      if (bg.querySelector('#gnSave').checked && !S.groupNames.includes(v)) { S.groupNames = [...S.groupNames, v]; await db.collection('settings').doc('groupNames').set({ list: S.groupNames, updatedAt: TS(), by: S.user.email }); }
+      done(v);
+    };
+    bg.querySelector('#gnOk').onclick = ok;
+    inp.onkeydown = e => { if (e.key === 'Enter') ok(); if (e.key === 'Escape') done(null); };
+  });
 }
 function groupMembers(gid) { const out = []; for (const m of Object.values(S.months)) for (const t of m.txns.values()) if (t.groupId === gid) out.push(t); return out; }
 async function ungroup(gid) {
@@ -862,15 +1010,46 @@ async function saveGroupLabel(gid, raw) {
   ts.forEach(t => t.groupLabel = val); toast('저장했어요');
 }
 
-async function addManual(form) {
-  const dir = form.dataset.dir, acct = form.querySelector('[data-k=acct]').value;
-  const label = form.querySelector('[data-k=label]').value.trim(), amt = num(form.querySelector('[data-k=amt]').value);
-  if (!label || !amt) return toast('내역과 금액을 입력해 주세요');
+async function addManualEntry() {
+  const key = $('#mItem').value, amt = num($('#mAmt').value), label = $('#mLabel').value.trim();
+  if (!amt) { toast(key.startsWith('people.') ? '인원을 입력해 주세요' : '금액을 입력해 주세요'); return $('#mAmt').focus(); }
   const m = S.months[ymOf(S.date)], doc = m.manual[S.date] = m.manual[S.date] || {};
-  const key = dir === 'in' ? 'inRows' : 'outRows';
-  doc[key] = [...(doc[key] || []), { id: 'm' + Date.now().toString(36), acct6: acct, label, amt }];
-  await db.collection('manual').doc(S.date).set({ [key]: doc[key], updatedAt: TS(), by: S.user.email }, { merge: true });
-  toast('추가했어요'); renderDay();
+  const id = 'm' + Date.now().toString(36);
+  S.mItem = key;
+  if (['cashIn', 'cashOut', 'acctIn', 'acctOut'].includes(key)) {
+    if (!label) { toast('입/출금 내역에 표시될 내역을 입력해 주세요'); return $('#mLabel').focus(); }
+    const dk = key.endsWith('In') ? 'inRows' : 'outRows', acct = key.startsWith('acct') ? $('#mAcct').value : 'cash';
+    if (key.startsWith('acct')) S.mAcct = acct;
+    doc[dk] = [...(doc[dk] || []), { id, acct6: acct, label, amt }];
+    await db.collection('manual').doc(S.date).set({ [dk]: doc[dk], updatedAt: TS(), by: S.user.email }, { merge: true });
+  } else {
+    doc.entries = [...(doc.entries || []), { id, key, amt, label }];
+    await db.collection('manual').doc(S.date).set({ entries: doc.entries, updatedAt: TS(), by: S.user.email }, { merge: true });
+  }
+  toast('추가했어요');
+  await renderDay();
+  const a = $('#mAmt'); if (a) a.focus();
+}
+async function savePeople(k, raw) {
+  const m = S.months[ymOf(S.date)], doc = m.manual[S.date] = m.manual[S.date] || {};
+  doc.people = doc.people || {};
+  if (String(raw).trim() === '') delete doc.people[k]; else doc.people[k] = num(raw);
+  await db.collection('manual').doc(S.date).set({ people: { [k]: String(raw).trim() === '' ? firebase.firestore.FieldValue.delete() : num(raw) }, updatedAt: TS(), by: S.user.email }, { merge: true });
+  toast('인원을 저장했어요'); renderDay();
+}
+async function setAutoCheck(acct, val) {
+  const m = S.months[ymOf(S.date)], doc = m.manual[S.date] = m.manual[S.date] || {};
+  doc.autoChecks = { ...(doc.autoChecks || {}), [acct]: val };
+  await db.collection('manual').doc(S.date).set({ autoChecks: { [acct]: val }, updatedAt: TS(), by: S.user.email }, { merge: true });
+  if (val) S.open.delete('auto:' + acct);
+  toast(val ? '확인했어요' : '확인을 취소했어요'); renderDay();
+}
+async function updateEntry(id, patch) {
+  const m = S.months[ymOf(S.date)], doc = m.manual[S.date] || {};
+  doc.entries = (doc.entries || []).flatMap(r => r.id !== id ? [r] : (patch ? [{ ...r, ...patch }] : []));
+  m.manual[S.date] = doc;
+  await db.collection('manual').doc(S.date).set({ entries: doc.entries, updatedAt: TS(), by: S.user.email }, { merge: true });
+  toast(patch ? '저장했어요' : '삭제했어요'); renderDay();
 }
 async function updateManual(dir, id, patch) {
   const m = S.months[ymOf(S.date)], doc = m.manual[S.date] || {}, key = dir === 'in' ? 'inRows' : 'outRows';
@@ -979,10 +1158,12 @@ function renderUpload() {
   const el = $('#v-upload'), p = S.pending;
   el.innerHTML = `<div class="panel">
     <h2>수시입출계좌 내역 업로드</h2>
-    <p class="hint">은행에서 내려받은 수시입출계좌(원화) 엑셀을 그대로 올리세요. 이미 올린 거래는 자동으로 건너뛰어서, 기간이 겹쳐도 중복되지 않아요.</p>
-    <label class="drop" id="drop"><input type="file" id="file" accept=".xlsx,.xls,.csv" hidden>
-      <b>여기에 파일을 끌어다 놓거나 클릭해서 선택</b><div class="hint">xlsx · xls · csv</div></label>
-    ${p ? `<h3>${esc(p.fileName)}</h3>
+    <p class="hint">은행에서 내려받은 수시입출계좌(원화) 엑셀을 그대로 올리세요. 여러 파일을 한 번에 올릴 수 있고, 이미 올린 거래는 자동으로 건너뛰어서 기간이 겹쳐도 중복되지 않아요.</p>
+    <label class="drop" id="drop"><input type="file" id="file" accept=".xlsx,.xls,.csv" multiple hidden>
+      <b>여기에 파일을 끌어다 놓거나 클릭해서 선택</b><span class="hint">여러 파일 선택 가능 · xlsx · xls · csv</span></label>
+    ${p ? `<h3>선택한 파일 ${p.files.length}개</h3>
+      <div class="filechips">${p.files.map(f => `<span class="chip">${esc(f.name)} · <b>${f.count}</b>건</span>`).join('')}</div>
+      ${p.errors.length ? `<div class="warn">읽지 못한 파일: ${p.errors.map(esc).join(' / ')}</div>` : ''}
       <div class="chips"><span class="chip">전체 <b>${p.txs.length}</b>건</span><span class="chip">새 거래 <b>${p.newCount}</b>건</span><span class="chip">이미 있음 <b>${p.txs.length - p.newCount}</b>건</span><span class="chip">${p.min} ~ ${p.max}</span></div>
       ${p.unknown.length ? `<div class="warn">설정에 없는 계좌가 있어요: ${p.unknown.map(esc).join(', ')}. 저장은 되지만 일보에는 설정에서 계좌를 추가한 뒤 나타나요.</div>` : ''}
       <div class="scroll"><table class="t"><thead><tr><th></th><th>거래일자</th><th>시간</th><th>계좌</th><th class="num">입금액</th><th class="num">출금액</th><th>적요1</th><th>의뢰인/수취인</th><th>자동 적용될 내역</th></tr></thead><tbody>
@@ -994,51 +1175,66 @@ function renderUpload() {
   const drop = $('#drop'), file = $('#file');
   drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
   drop.ondragleave = () => drop.classList.remove('over');
-  drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) busy(() => parseUpload(e.dataTransfer.files[0])); };
-  file.onchange = () => file.files[0] && busy(() => parseUpload(file.files[0]));
+  drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files.length) busy(() => parseUploads([...e.dataTransfer.files])); };
+  file.onchange = () => file.files.length && busy(() => parseUploads([...file.files]));
   if (p) { $('#saveUp').onclick = () => busy(saveUpload); $('#cancelUp').onclick = () => { S.pending = null; renderUpload(); }; }
   loadHistory();
 }
 
-async function parseUpload(file) {
+async function parseOneUpload(file, fi) {
   const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
   const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
   const hi = rows.findIndex(r => r.map(x => String(x).trim()).includes('계좌번호') && r.map(x => String(x).trim()).includes('입금액'));
-  if (hi < 0) throw new Error('계좌번호·입금액 머리글을 찾지 못했어요. 수시입출계좌 원본 파일인지 확인해 주세요');
+  if (hi < 0) throw new Error('계좌번호·입금액 머리글이 없어요');
   const H = rows[hi].map(h => String(h).trim()), col = n => H.indexOf(n);
   const data = rows.slice(hi + 1).filter(r => String(r[col('계좌번호')] || '').trim() && String(r[col('거래일자')] || '').trim());
-  const N = data.length, seen = new Set(), am = accMap(), unknown = new Set();
-  const txs = data.map((r, i) => {
+  const N = data.length, seen = new Set();
+  return data.map((r, i) => {
     const g = n => { const k = col(n); return k < 0 ? '' : r[k]; }, s = n => String(g(n) ?? '').trim();
     const t = { site: s('사업장'), bank: s('금융기관'), acctNo: s('계좌번호'), acct6: acct6(g('계좌번호')), alias: s('계좌별칭'),
       date: normDate(g('거래일자')), time: normTime(g('거래시간')), inAmt: num(g('입금액')), outAmt: num(g('출금액')), bal: num(g('잔액')),
       dayBal: num(g('일자잔액')), periodBal: num(g('기간잔액')), memo: s('적요'), memo1: s('적요1'), memo2: s('적요2'), branch: s('취급점'),
-      party: s('의뢰인/수취인'), note: s('비고'), ord: N - i };
+      party: s('의뢰인/수취인'), note: s('비고'), ord: N - i, fi };
     let id = makeId(t); while (seen.has(id)) id += '_d'; seen.add(id); t.id = id;
-    if (!am.has(t.acct6)) unknown.add(`${t.acctNo}${t.alias ? ' (' + t.alias + ')' : ''}`);
     return t;
   }).filter(t => t.date);
-  if (!txs.length) throw new Error('읽을 수 있는 거래가 없어요');
+}
+async function parseUploads(fileList) {
+  const am = accMap(), unknown = new Set(), files = [], errors = [], byId = new Map();
+  for (const [fi, file] of fileList.entries()) {
+    try {
+      const txs = await parseOneUpload(file, fi);
+      files.push({ name: file.name, count: txs.length });
+      txs.forEach(t => { if (!byId.has(t.id)) byId.set(t.id, t); if (!am.has(t.acct6)) unknown.add(`${t.acctNo}${t.alias ? ' (' + t.alias + ')' : ''}`); });
+    } catch (e) { errors.push(`${file.name} (${e.message})`); files.push({ name: file.name, count: 0 }); }
+  }
+  const txs = [...byId.values()].sort((a, b) => -cmpTx(a, b));
+  if (!txs.length) throw new Error('읽을 수 있는 거래가 없어요. 수시입출계좌 원본 파일인지 확인해 주세요');
   const dates = txs.map(t => t.date).sort(), min = dates[0], max = dates[dates.length - 1];
   const exist = new Set(); (await db.collection('txns').where('date', '>=', min).where('date', '<=', max).get()).forEach(d => exist.add(d.id));
   const newIds = new Set(txs.filter(t => !exist.has(t.id)).map(t => t.id));
-  S.pending = { fileName: file.name, txs, newIds, newCount: newIds.size, min, max, unknown: [...unknown] };
+  S.pending = { files, errors, txs, newIds, newCount: newIds.size, min, max, unknown: [...unknown] };
   renderUpload();
 }
 
 async function saveUpload() {
-  const p = S.pending, up = db.collection('uploads').doc();
+  const p = S.pending;
+  const refs = p.files.map(() => db.collection('uploads').doc());
   const ops = p.txs.map(t => {
-    const ref = db.collection('txns').doc(t.id);
+    const ref = db.collection('txns').doc(t.id), up = refs[t.fi];
     if (!p.newIds.has(t.id)) return b => b.update(ref, { uploadIds: firebase.firestore.FieldValue.arrayUnion(up.id) });
-    const { id, ...data } = t, rule = S.rules[ruleKey(t)];
+    const { id, fi, ...data } = t, rule = S.rules[ruleKey(t)];
     return b => b.set(ref, { ...data, uploadIds: [up.id], label: rule ? rule.label : null, labelSrc: rule ? 'rule' : null, groupId: null, groupLabel: null, createdAt: TS(), by: S.user.email });
   });
   await commitBatches(ops);
-  await up.set({ fileName: p.fileName, at: TS(), by: S.user.email, count: p.txs.length, newCount: p.newCount, minDate: p.min, maxDate: p.max });
+  await Promise.all(p.files.map((f, i) => {
+    const mine = p.txs.filter(t => t.fi === i); if (!mine.length) return null;
+    const ds = mine.map(t => t.date).sort();
+    return refs[i].set({ fileName: f.name, at: TS(), by: S.user.email, count: mine.length, newCount: mine.filter(t => p.newIds.has(t.id)).length, minDate: ds[0], maxDate: ds[ds.length - 1] });
+  }));
   new Set(p.txs.map(t => ymOf(t.date))).forEach(ym => delete S.months[ym]);
   S.tx.list = null; IV.invs = null;
-  toast(`${p.newCount}건을 저장했어요`);
+  toast(`${p.files.length}개 파일에서 새 거래 ${p.newCount}건을 저장했어요`);
   S.pending = null; S.date = p.max; go('day');
 }
 
@@ -1150,6 +1346,26 @@ async function renderSettings() {
   </div>
 
   <div class="panel">
+    <h2>카드 입금 자동 묶기</h2>
+    <p class="hint">계좌별로 카드사·PG 입금을 찾아 한 줄로 묶어요. 일보에서 펼쳐서 확인하고, 아닌 건은 ‘빼기’로 뺄 수 있어요.</p>
+    <div id="agRules">${(S.autoGroups.rules || []).map(r => `<div class="row" style="margin-bottom:6px"><select class="in" data-ag="acct">${S.accounts.map(a => `<option value="${a.acct6}" ${a.acct6 === r.acct6 ? 'selected' : ''}>${esc(a.short)}</option>`).join('')}</select><input class="in" data-ag="name" style="flex:1;max-width:360px" value="${esc(r.name)}"><button class="btn ghost sm" data-agdel>삭제</button></div>`).join('')}</div>
+    <button class="btn sm" id="agAdd" style="margin:4px 0 14px">계좌 추가</button>
+    <div class="grid-in" style="grid-template-columns:1fr">
+      <label>카드사로 볼 이름 (뒤에 숫자가 붙는 경우, 쉼표로 구분)<input class="in" style="text-align:left" id="agPrefixes" value="${esc(S.autoGroups.prefixes)}"></label>
+      <label>이 글자가 들어가면 카드·PG 입금으로 보기<input class="in" style="text-align:left" id="agContains" value="${esc(S.autoGroups.contains)}"></label>
+      <label>적요에 이 글자가 있으면 카드 입금으로 보기<input class="in" style="text-align:left" id="agMemo" value="${esc(S.autoGroups.memoKeys)}"></label>
+    </div>
+    <div class="row" style="margin-top:12px"><button class="btn primary" id="agSave">자동 묶기 저장하기</button></div>
+  </div>
+
+  <div class="panel">
+    <h2>묶기 자주 쓰는 이름</h2>
+    <p class="hint">일보에서 여러 건을 묶을 때 버튼으로 바로 고를 수 있어요.</p>
+    <div id="gnList">${S.groupNames.map(g => `<div class="row" style="margin-bottom:6px"><input class="in" style="flex:1;max-width:420px" data-gn value="${esc(g)}"><button class="btn ghost sm" data-gndel>삭제</button></div>`).join('')}</div>
+    <div class="row" style="margin-top:10px"><button class="btn sm" id="gnAdd">이름 추가</button><button class="btn primary" id="gnSaveAll">저장하기</button></div>
+  </div>
+
+  <div class="panel">
     <h2>자동 적용 규칙 <span class="hint">${ruleRows.length}개</span></h2>
     <p class="hint">일보에서 내역을 고치면 ‘적요1 + 의뢰인/수취인’ 조합으로 기억해 두었다가, 다음 업로드 때 같은 거래에 자동으로 넣어요.</p>
     ${ruleRows.length ? `<div class="scroll"><table class="t"><thead><tr><th>적요1</th><th>의뢰인/수취인</th><th>일보 내역</th><th></th></tr></thead><tbody>
@@ -1180,6 +1396,21 @@ async function renderSettings() {
   </div>`;
 
   $('#opYm').onchange = e => { S.openYm = e.target.value; renderSettings(); };
+  $('#agAdd').onclick = () => $('#agRules').insertAdjacentHTML('beforeend', `<div class="row" style="margin-bottom:6px"><select class="in" data-ag="acct">${S.accounts.map(a => `<option value="${a.acct6}">${esc(a.short)}</option>`).join('')}</select><input class="in" data-ag="name" style="flex:1;max-width:360px" placeholder="묶음 이름"><button class="btn ghost sm" data-agdel>삭제</button></div>`);
+  $('#agRules').onclick = e => { if (e.target.closest('[data-agdel]')) e.target.closest('.row').remove(); };
+  $('#agSave').onclick = () => busy(async () => {
+    const rules = [...$('#agRules').querySelectorAll('.row')].map(r => ({ acct6: r.querySelector('[data-ag=acct]').value, name: r.querySelector('[data-ag=name]').value.trim() })).filter(r => r.name);
+    S.autoGroups = { rules, prefixes: $('#agPrefixes').value.trim(), contains: $('#agContains').value.trim(), memoKeys: $('#agMemo').value.trim() };
+    await db.collection('settings').doc('autoGroups').set({ ...S.autoGroups, updatedAt: TS(), by: S.user.email });
+    toast('자동 묶기를 저장했어요');
+  });
+  $('#gnAdd').onclick = () => { $('#gnList').insertAdjacentHTML('beforeend', `<div class="row" style="margin-bottom:6px"><input class="in" style="flex:1;max-width:420px" data-gn placeholder="예: 학원_수강료 매출 예입"><button class="btn ghost sm" data-gndel>삭제</button></div>`); $('#gnList').lastElementChild.querySelector('input').focus(); };
+  $('#gnList').onclick = e => { if (e.target.closest('[data-gndel]')) e.target.closest('.row').remove(); };
+  $('#gnSaveAll').onclick = () => busy(async () => {
+    S.groupNames = [...new Set([...$('#gnList').querySelectorAll('[data-gn]')].map(i => i.value.trim()).filter(Boolean))];
+    await db.collection('settings').doc('groupNames').set({ list: S.groupNames, updatedAt: TS(), by: S.user.email });
+    toast('자주 쓰는 이름을 저장했어요');
+  });
   $('#opSave').onclick = () => busy(async () => {
     const data = { accts: {}, borrow: {} };
     $('#opForm').querySelectorAll('[data-op]').forEach(inp => {
