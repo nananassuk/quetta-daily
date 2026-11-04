@@ -145,7 +145,8 @@ details.extra summary{cursor:pointer;font-weight:600;padding:4px 0}
 .sugg div.on,.sugg div:hover{background:var(--teal-soft)}
 .sugg mark{background:none;color:var(--teal-deep);font-weight:700}
 .mrows{display:flex;flex-direction:column;gap:8px}
-.mrows .madd{grid-template-columns:96px minmax(170px,230px) auto 130px 1fr auto}
+.mrows .madd{grid-template-columns:86px 150px auto 120px minmax(280px,1fr) auto}
+.mrows .madd .btn{padding:4px 10px;font-size:12.5px}
 .mrows .madd .gname{font-weight:700;color:var(--teal-deep);font-size:13px}
 @media (max-width:760px){.mrows .madd{grid-template-columns:1fr 1fr}}
 .newb{display:inline-block;font-size:10.5px;font-weight:800;color:#fff;background:var(--teal);border-radius:4px;padding:0 5px;vertical-align:1px}
@@ -272,11 +273,20 @@ const DEFAULT_ACCOUNTS = [
 ];
 const DEFAULT_BORROW = [{ name: '한국산업은행', rate: 0, note: '' }, { name: '단우개발㈜', rate: 0.046, note: '' }];
 const DEFAULT_AUTOGROUPS = {
-  rules: [{ acct6: '127766', name: '학원_수강료 매출 예입' }, { acct6: '005262', name: '퀀텀1_매출 예입' }, { acct6: '005275', name: '퀀텀2_매출 예입' }],
+  rules: [
+    { acct6: '127766', dir: 'in', match: 'card', name: '학원_수강료 매출 예입' }, { acct6: '005262', dir: 'in', match: 'card', name: '퀀텀1_매출 예입' }, { acct6: '005275', dir: 'in', match: 'card', name: '퀀텀2_매출 예입' },
+    { acct6: '005465', dir: 'out', match: 'word', word: '환불', name: '환불_수강료환불' }, { acct6: '005262', dir: 'out', match: 'word', word: '환불', name: '퀀텀1_환불' }, { acct6: '005275', dir: 'out', match: 'word', word: '환불', name: '퀀텀2_환불' }
+  ],
   prefixes: 'KB, 국민, BC, 비씨, 신한, 하나, 우리, 우, 삼성, 현대, 현, 롯데, 농협, NH, 씨티, 광주, 전북, 수협',
   contains: '케이씨피, KCP',
   memoKeys: '가맹입금'
 };
+function autoRuleHit(r, t, dir, cfg) {
+  if ((r.dir || 'in') !== dir || r.acct6 !== t.acct6) return false;
+  if ((r.match || 'card') === 'card') return dir === 'in' && isCardTx(t, cfg);
+  const w = String(r.word || '').trim(); if (!w) return false;
+  return `${t.memo || ''} ${t.memo1 || ''} ${t.memo2 || ''}`.normalize('NFKC').includes(w);
+}
 const splitList = s => String(s || '').split(/\s*,\s*/).map(x => x.trim()).filter(Boolean);
 function isCardTx(t, cfg) {
   if (!(num(t.inAmt) > 0)) return false;
@@ -628,6 +638,8 @@ async function loadSettings() {
   const docs = await Promise.all(['accounts', 'borrow', 'extra', 'groupNames', 'autoGroups'].map(k => db.collection('settings').doc(k).get()));
   const [a, b, e, gn, ag] = docs.map(d => d.exists ? d.data() : null);
   S.autoGroups = Object.assign(clone(DEFAULT_AUTOGROUPS), ag || {});
+  S.autoGroups.rules = (S.autoGroups.rules || []).map(r => ({ dir: 'in', match: 'card', ...r }));
+  if (ag && !ag.v2) S.autoGroups.rules.push(...DEFAULT_AUTOGROUPS.rules.filter(r => r.dir === 'out' && !S.autoGroups.rules.some(x => x.acct6 === r.acct6 && x.dir === 'out')));
   S.groupNames = gn && gn.list ? gn.list : [];
   S.accounts = a && a.list && a.list.length ? a.list : clone(DEFAULT_ACCOUNTS);
   S.borrow = b && b.list ? b.list : clone(DEFAULT_BORROW);
@@ -679,10 +691,10 @@ function dayFlows(ym, date) {
     for (const [dir, amt, rows, bucket] of [['in', num(t.inAmt), inRows, acctIn], ['out', num(t.outAmt), outRows, acctOut]]) {
       if (!amt) continue;
       bucket[t.acct6] = (bucket[t.acct6] || 0) + amt;
-      const ar = dir === 'in' && !t.groupId && !t.autoOut ? (S.autoGroups.rules || []).find(x => x.acct6 === t.acct6) : null;
-      if (ar && isCardTx(t, S.autoGroups)) {
-        const k = 'auto:' + t.acct6;
-        if (!groups[k]) { groups[k] = { dir, subject: a.subject, label: ar.name, acct6: t.acct6, amt: 0, ord: order.get(t.acct6), time: t.time, members: [], autoKey: k }; rows.push(groups[k]); }
+      const ar = !t.groupId && !t.autoOut ? (S.autoGroups.rules || []).find(x => autoRuleHit(x, t, dir, S.autoGroups)) : null;
+      if (ar) {
+        const k = `auto:${t.acct6}:${dir}:${ar.name}`;
+        if (!groups[k]) { groups[k] = { dir, subject: a.subject, label: ar.name, acct6: t.acct6, amt: 0, ord: order.get(t.acct6), time: t.time, members: [], autoKey: k, ckey: `${t.acct6}:${dir}:${ar.name}`, kind: (ar.match || 'card') === 'card' ? '카드 입금' : `‘${ar.word}’ ${dir === 'in' ? '입금' : '출금'}` }; rows.push(groups[k]); }
         groups[k].amt += amt; groups[k].members.push(t);
       } else if (t.groupId) {
         const k = dir + t.groupId;
@@ -816,18 +828,19 @@ function entryHtml(r, am) {
     </div>`;
   }
   if (r.autoKey) {
-    const man = (S.months[ymOf(S.date)].manual[S.date] || {}), chk = (man.autoChecks || {})[r.acct6];
+    const man = (S.months[ymOf(S.date)].manual[S.date] || {}), checks = man.autoChecks || {};
+    const chk = checks[r.ckey] || (r.dir === 'in' && r.kind === '카드 입금' ? checks[r.acct6] : null);
     const valid = chk && chk.count === r.members.length && chk.sum === r.amt;
     const stale = chk && !valid;
     const opened = !valid || S.open.has(r.autoKey);
     const who = chk ? (String(chk.by || '').match(/[A-Za-z]/) || ['?'])[0].toUpperCase() : '', when = chk && chk.at ? (d => `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`)(new Date(chk.at)) : '';
     return `<div class="entry auto ${valid ? 'checked' : ''}"><span></span>
-      <div class="meta">${tag}<span class="src rule">카드 입금 자동 묶음 ${r.members.length}건</span>
-        ${valid ? `<span class="checked-badge" title="${esc(chk.by)}">✓ ${esc(who)} · ${esc(when)}</span><button class="btn ghost sm" data-act="atoggle" data-key="${r.autoKey}">${opened ? '접기' : '펼쳐 보기'}</button><button class="btn ghost sm" data-act="auncheck" data-acct="${r.acct6}">확인 취소</button>`
-               : `${stale ? '<span class="recheck">확인 후 내역이 바뀌어 다시 확인이 필요해요</span>' : ''}<button class="btn sm primary" data-act="acheck" data-acct="${r.acct6}" data-count="${r.members.length}" data-sum="${r.amt}">확인</button>`}</div>
+      <div class="meta">${tag}<span class="src rule">${esc(r.kind)} 자동 묶음 ${r.members.length}건</span>
+        ${valid ? `<span class="checked-badge" title="${esc(chk.by)}">✓ ${esc(who)} · ${esc(when)}</span><button class="btn ghost sm" data-act="atoggle" data-key="${esc(r.autoKey)}">${opened ? '접기' : '펼쳐 보기'}</button><button class="btn ghost sm" data-act="auncheck" data-acct="${esc(r.ckey)}" data-key="${esc(r.autoKey)}">확인 취소</button>`
+               : `${stale ? '<span class="recheck">확인 후 내역이 바뀌어 다시 확인이 필요해요</span>' : ''}<button class="btn sm primary" data-act="acheck" data-acct="${esc(r.ckey)}" data-key="${esc(r.autoKey)}" data-count="${r.members.length}" data-sum="${r.amt}">확인</button>`}</div>
       <div class="lbl"><b>${esc(r.label)}</b></div>
       <div class="amt">${won(r.amt)}</div>
-      ${opened ? `<div class="members">${r.members.map(t => `<div class="mrow"><span>${esc(t.time)} · ${esc(t.party || t.memo1)}${t.memo ? ` <span class="hint">(${esc(t.memo)})</span>` : ''}</span><span class="row"><span class="num">${won(t.inAmt)}</span><button class="btn ghost sm" data-act="aout" data-id="${t.id}">빼기</button></span></div>`).join('')}</div>` : ''}
+      ${opened ? `<div class="members">${r.members.map(t => `<div class="mrow"><span>${esc(t.time)} · ${esc(t.party || t.memo1)}${t.memo ? ` <span class="hint">(${esc(t.memo)})</span>` : ''}</span><span class="row"><span class="num">${won(r.dir === 'in' ? t.inAmt : t.outAmt)}</span><button class="btn ghost sm" data-act="aout" data-id="${t.id}">빼기</button></span></div>`).join('')}</div>` : ''}
     </div>`;
   }
   if (r.groupId) {
@@ -949,7 +962,7 @@ function manualPanelHtml(f, op) {
       <select class="in acct" data-m="acct" aria-label="계좌" ${needAcct ? '' : 'hidden'}>${acctOpts}</select>
       <input class="in num" data-m="amt" inputmode="numeric" placeholder="금액" aria-label="금액">
       <input class="in" data-m="label" data-suggest placeholder="내역" aria-label="내역">
-      <button class="btn primary" data-act="m-add" data-g="${gi}">추가</button>
+      <button class="btn primary sm" data-act="m-add" data-g="${gi}">추가</button>
     </div>`;
   }).join('');
   return `<div class="mpanel">
@@ -974,8 +987,8 @@ dayEl.addEventListener('click', async e => {
   else if (act === 'ungroup') ungroup(b.dataset.gid);
   else if (act === 'm-add') addManualEntry(b.closest('.madd'));
   else if (act === 'atoggle') { const k = b.dataset.key; S.open.has(k) ? S.open.delete(k) : S.open.add(k); renderDay(); }
-  else if (act === 'acheck') setAutoCheck(b.dataset.acct, { by: S.user.email, at: Date.now(), count: +b.dataset.count, sum: +b.dataset.sum });
-  else if (act === 'auncheck') setAutoCheck(b.dataset.acct, null);
+  else if (act === 'acheck') setAutoCheck(b.dataset.acct, { by: S.user.email, at: Date.now(), count: +b.dataset.count, sum: +b.dataset.sum }, b.dataset.key);
+  else if (act === 'auncheck') setAutoCheck(b.dataset.acct, null, b.dataset.key);
   else if (act === 'aout' || act === 'ain') busy(async () => { const t = findTx(b.dataset.id); const v = act === 'aout'; await db.collection('txns').doc(t.id).update({ autoOut: v }); t.autoOut = v; toast(v ? '묶음에서 뺐어요' : '묶음에 다시 넣었어요'); renderDay(); });
   else if (act === 'm-del') updateManual(b.dataset.dir, b.dataset.id, null);
   else if (act === 'e-del') updateEntry(b.dataset.id, null);
@@ -1124,11 +1137,11 @@ async function savePeople(k, raw) {
   await db.collection('manual').doc(S.date).set({ people: { [k]: String(raw).trim() === '' ? firebase.firestore.FieldValue.delete() : num(raw) }, updatedAt: TS(), by: S.user.email }, { merge: true });
   toast('인원을 저장했어요'); renderDay();
 }
-async function setAutoCheck(acct, val) {
+async function setAutoCheck(acct, val, akey) {
   const m = S.months[ymOf(S.date)], doc = m.manual[S.date] = m.manual[S.date] || {};
   doc.autoChecks = { ...(doc.autoChecks || {}), [acct]: val };
   await db.collection('manual').doc(S.date).set({ autoChecks: { [acct]: val }, updatedAt: TS(), by: S.user.email }, { merge: true });
-  if (val) S.open.delete('auto:' + acct);
+  if (val && akey) S.open.delete(akey);
   toast(val ? '확인했어요' : '확인을 취소했어요'); renderDay();
 }
 async function updateManual(dir, id, patch) {
@@ -1426,9 +1439,9 @@ async function renderSettings() {
   </div>
 
   <div class="panel">
-    <h2>카드 입금 자동 묶기</h2>
-    <p class="hint">계좌별로 카드사·PG 입금을 찾아 한 줄로 묶어요. 일보에서 펼쳐서 확인하고, 아닌 건은 ‘빼기’로 뺄 수 있어요.</p>
-    <div id="agRules">${(S.autoGroups.rules || []).map(r => `<div class="row" style="margin-bottom:6px"><select class="in" data-ag="acct">${S.accounts.map(a => `<option value="${a.acct6}" ${a.acct6 === r.acct6 ? 'selected' : ''}>${esc(accName(a))}</option>`).join('')}</select><input class="in" data-ag="name" style="flex:1;max-width:360px" value="${esc(r.name)}"><button class="btn ghost sm" data-agdel>삭제</button></div>`).join('')}</div>
+    <h2>자동 묶기 (카드 입금 · 환불 출금)</h2>
+    <p class="hint">계좌별로 카드사·PG 입금이나 적요에 특정 글자(예: 환불)가 있는 출금을 찾아 한 줄로 묶어요. 일보에서 펼쳐서 확인하고, 아닌 건은 ‘빼기’로 뺄 수 있어요.</p>
+    <div id="agRules">${(S.autoGroups.rules || []).map(r => `<div class="row" style="margin-bottom:6px"><select class="in" data-ag="acct">${S.accounts.map(a => `<option value="${a.acct6}" ${a.acct6 === r.acct6 ? 'selected' : ''}>${esc(accName(a))}</option>`).join('')}</select><select class="in" data-ag="dir"><option value="in" ${r.dir !== 'out' ? 'selected' : ''}>입금</option><option value="out" ${r.dir === 'out' ? 'selected' : ''}>출금</option></select><select class="in" data-ag="match"><option value="card" ${r.match !== 'word' ? 'selected' : ''}>카드사·PG 입금</option><option value="word" ${r.match === 'word' ? 'selected' : ''}>적요에 이 글자 포함 →</option></select><input class="in" data-ag="word" style="width:90px" value="${esc(r.word || '')}" placeholder="예: 환불"><input class="in" data-ag="name" style="flex:1;max-width:300px" value="${esc(r.name || '')}" placeholder="묶음 이름"><button class="btn ghost sm" data-agdel>삭제</button></div>`).join('')}</div>
     <button class="btn sm" id="agAdd" style="margin:4px 0 14px">계좌 추가</button>
     <div class="grid-in" style="grid-template-columns:1fr">
       <label>카드사로 볼 이름 (뒤에 숫자가 붙는 경우, 쉼표로 구분)<input class="in" style="text-align:left" id="agPrefixes" value="${esc(S.autoGroups.prefixes)}"></label>
@@ -1476,11 +1489,11 @@ async function renderSettings() {
   </div>`;
 
   $('#opYm').onchange = e => { S.openYm = e.target.value; renderSettings(); };
-  $('#agAdd').onclick = () => $('#agRules').insertAdjacentHTML('beforeend', `<div class="row" style="margin-bottom:6px"><select class="in" data-ag="acct">${S.accounts.map(a => `<option value="${a.acct6}">${esc(accName(a))}</option>`).join('')}</select><input class="in" data-ag="name" style="flex:1;max-width:360px" placeholder="묶음 이름"><button class="btn ghost sm" data-agdel>삭제</button></div>`);
+  $('#agAdd').onclick = () => { const r = { acct6: S.accounts[0] ? S.accounts[0].acct6 : '', dir: 'in', match: 'card', word: '', name: '' }; $('#agRules').insertAdjacentHTML('beforeend', `<div class="row" style="margin-bottom:6px"><select class="in" data-ag="acct">${S.accounts.map(a => `<option value="${a.acct6}" ${a.acct6 === r.acct6 ? 'selected' : ''}>${esc(accName(a))}</option>`).join('')}</select><select class="in" data-ag="dir"><option value="in" ${r.dir !== 'out' ? 'selected' : ''}>입금</option><option value="out" ${r.dir === 'out' ? 'selected' : ''}>출금</option></select><select class="in" data-ag="match"><option value="card" ${r.match !== 'word' ? 'selected' : ''}>카드사·PG 입금</option><option value="word" ${r.match === 'word' ? 'selected' : ''}>적요에 이 글자 포함 →</option></select><input class="in" data-ag="word" style="width:90px" value="${esc(r.word || '')}" placeholder="예: 환불"><input class="in" data-ag="name" style="flex:1;max-width:300px" value="${esc(r.name || '')}" placeholder="묶음 이름"><button class="btn ghost sm" data-agdel>삭제</button></div>`); };
   $('#agRules').onclick = e => { if (e.target.closest('[data-agdel]')) e.target.closest('.row').remove(); };
   $('#agSave').onclick = () => busy(async () => {
-    const rules = [...$('#agRules').querySelectorAll('.row')].map(r => ({ acct6: r.querySelector('[data-ag=acct]').value, name: r.querySelector('[data-ag=name]').value.trim() })).filter(r => r.name);
-    S.autoGroups = { rules, prefixes: $('#agPrefixes').value.trim(), contains: $('#agContains').value.trim(), memoKeys: $('#agMemo').value.trim() };
+    const rules = [...$('#agRules').querySelectorAll('.row')].map(r => ({ acct6: r.querySelector('[data-ag=acct]').value, dir: r.querySelector('[data-ag=dir]').value, match: r.querySelector('[data-ag=match]').value, word: r.querySelector('[data-ag=word]').value.trim(), name: r.querySelector('[data-ag=name]').value.trim() })).filter(r => r.name && (r.match === 'card' ? r.dir === 'in' : r.word));
+    S.autoGroups = { v2: true, rules, prefixes: $('#agPrefixes').value.trim(), contains: $('#agContains').value.trim(), memoKeys: $('#agMemo').value.trim() };
     await db.collection('settings').doc('autoGroups').set({ ...S.autoGroups, updatedAt: TS(), by: S.user.email });
     toast('자동 묶기를 저장했어요');
   });
