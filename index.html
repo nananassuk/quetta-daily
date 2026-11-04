@@ -1809,7 +1809,17 @@ async function doMatch(silent) {
   refreshBizMap();
   const negs = IV.invs.filter(i => num(i.total) < 0 && !i.voided);
   if (negs.length) { await commitBatches(negs.map(i => b => b.update(db.collection('invoices').doc(i.id), { status: 'excluded', lock: true, voided: true, manualNote: '마이너스 계산서 (발행 취소)' }))); negs.forEach(i => Object.assign(i, { status: 'excluded', lock: true, voided: true, manualNote: '마이너스 계산서 (발행 취소)' })); }
-  IV.voidCands = new Set(IV.invs.filter(i => !i.voided && num(i.total) > 0 && i.status !== 'paid' && IV.invs.some(n => n.voided && num(n.total) < 0 && bizKey(n.vendorBiz) === bizKey(i.vendorBiz) && -num(n.total) === num(i.total))).map(i => i.id));
+  IV.voidCands = new Set();
+  const grp = {};
+  IV.invs.forEach(i => { const k = `${i.kind}|${bizKey(i.vendorBiz)}|${Math.abs(num(i.total))}`; (grp[k] = grp[k] || []).push(i); });
+  Object.values(grp).forEach(g => {
+    const negs = g.filter(i => num(i.total) < 0 && i.voided);
+    const done = g.filter(i => num(i.total) > 0 && i.voided).length;            // 이미 취소 처리한 원래 계산서
+    let left = negs.length - done; if (left <= 0) return;
+    const pos = g.filter(i => num(i.total) > 0 && !i.voided && i.status !== 'paid');
+    const near = d => Math.min(...negs.map(n => Math.abs(parseD(n.date || n.ym + '-01') - parseD(d || '2000-01-01'))));
+    pos.sort((a, b) => near(a.date) - near(b.date) || String(a.date).localeCompare(b.date)).slice(0, left).forEach(i => IV.voidCands.add(i.id));
+  });
   const r = runMatch(IV.invs, IV.txns, vendorOf, IV.batches, MCFG);
   IV.suggest = r.suggest;
   const ops = [];
@@ -1839,14 +1849,17 @@ async function renderInv() {
   const isNew = i => IV.lastUpload && i.uploadId === IV.lastUpload.id;
   const newCount = all.filter(isNew).length;
   const sk = IV.sortBy;
-  const list = all.filter(i => (IV.status === 'all' || i.status === IV.status) && (!IV.onlyNew || isNew(i)) && (!q || [i.vendorName, i.item, i.note, i.account, i.memo].some(x => String(x || '').toLowerCase().includes(q))))
-    .sort((a, b) => String(sk === 'pd' ? (payDateOf(a) || '9999') : (a[sk] || a.date || '')).localeCompare(String(sk === 'pd' ? (payDateOf(b) || '9999') : (b[sk] || b.date || ''))) || String(a.vendorName).localeCompare(String(b.vendorName)));
+  const inTab = i => IV.status === 'all' ? true : IV.status === 'void' ? (i.voided || (IV.voidCands && IV.voidCands.has(i.id))) : IV.status === 'excluded' ? (i.status === 'excluded' && !i.voided) : i.status === IV.status;
+  const list = all.filter(i => inTab(i) && (!IV.onlyNew || isNew(i)) && (!q || [i.vendorName, i.item, i.note, i.account, i.memo].some(x => String(x || '').toLowerCase().includes(q))))
+    .sort((a, b) => IV.status === 'void' ? (String(a.vendorName).localeCompare(b.vendorName) || Math.abs(num(a.total)) - Math.abs(num(b.total)) || String(a.date).localeCompare(b.date) || num(b.total) - num(a.total)) : 0)
+    .sort((a, b) => IV.status === 'void' ? 0 : String(sk === 'pd' ? (payDateOf(a) || '9999') : (a[sk] || a.date || '')).localeCompare(String(sk === 'pd' ? (payDateOf(b) || '9999') : (b[sk] || b.date || ''))) || String(a.vendorName).localeCompare(String(b.vendorName)));
   const sumBy = st => all.filter(i => i.status === st).reduce((s, i) => s + num(i.total), 0);
   const cntBy = st => all.filter(i => i.status === st).length;
   const unlinked = [...new Map(all.filter(i => i.type !== '수기' && !vendorOf(i)).map(i => [bizKey(i.vendorBiz), i])).values()];
   const selList = [...IV.sel].map(id => IV.invs.find(i => i.id === id)).filter(Boolean);
   const selSum = selList.reduce((s, i) => s + num(i.total), 0);
-  const statuses = IV.kind === 'sell' ? ['all', 'unpaid', 'review', 'paid', 'excluded'] : ['all', 'unpaid', 'review', 'planned', 'paid', 'excluded'];
+  const statuses = IV.kind === 'sell' ? ['all', 'unpaid', 'review', 'paid', 'excluded', 'void'] : ['all', 'unpaid', 'review', 'planned', 'paid', 'excluded', 'void'];
+  const voidTodo = all.filter(i => IV.voidCands && IV.voidCands.has(i.id)).length, voidN = all.filter(i => i.voided).length;
 
   el.innerHTML = `
   <div class="dayhead">
@@ -1873,7 +1886,7 @@ async function renderInv() {
     ${IV.kind === 'buy' ? `<span class="chip">이체 예정 <b>${cntBy('planned')}건 ${won(sumBy('planned'))}</b></span>` : ''}
   </div>
   <div class="row" style="margin-bottom:10px">
-    <div class="seg" id="ivStatus">${statuses.map(s => `<button data-s="${s}" aria-pressed="${IV.status === s}">${s === 'all' ? '전체' : L[s]}</button>`).join('')}</div>
+    <div class="seg" id="ivStatus">${statuses.map(s => `<button data-s="${s}" aria-pressed="${IV.status === s}">${s === 'all' ? '전체' : s === 'void' ? `발행 취소${voidTodo ? ` <b class="newb" style="background:var(--gold-deep)">${voidTodo}</b>` : voidN ? ` <span class="hint">${voidN}</span>` : ''}` : L[s]}</button>`).join('')}</div>
     <select class="in" id="ivSort" aria-label="정렬 기준">${[['date', '작성일자순'], ['issueDate', '발급일자순'], ['sendDate', '전송일자순'], ...(IV.kind === 'buy' ? [['pd', '예약이체일순']] : [])].map(([k, l]) => `<option value="${k}" ${IV.sortBy === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
     ${newCount ? `<label class="row hint"><input type="checkbox" id="ivOnlyNew" ${IV.onlyNew ? 'checked' : ''}> 이번 업로드만 보기 (<b class="inC">NEW ${newCount}건</b>)</label>` : ''}
     <input class="in" id="ivQ" style="flex:1;min-width:200px" placeholder="거래처·품목·계정명 검색" value="${esc(IV.q)}">
@@ -1883,6 +1896,7 @@ async function renderInv() {
     <thead><tr>${IV.kind === 'buy' ? `<th><input type="checkbox" id="ivSelAll" aria-label="미지급 전체 선택"></th>` : ''}<th>작성</th><th>발급</th><th>전송</th>${IV.kind === 'buy' ? '<th>예약이체</th>' : ''}<th>거래처</th><th>품목</th><th class="num">합계금액</th><th>품의서</th><th>상태</th><th>매칭 내역</th><th>계정명</th>${IV.kind === 'buy' ? '<th>이체 메모</th>' : ''}<th></th></tr></thead>
     <tbody>${list.length ? pageSlice(list).map(invRowHtml).join('') : `<tr><td colspan="15" class="empty">${all.length ? '조건에 맞는 계산서가 없어요.' : '이 달 세금계산서가 아직 없어요. 위에서 세금계산서 엑셀을 업로드하세요.'}</td></tr>`}</tbody>
   </table></div></div>
+  ${IV.status === 'void' ? `<p class="hint" style="margin:8px 4px">마이너스 계산서는 자동으로 발행 취소돼요. 노란 안내가 붙은 원래 계산서를 확인하고 <b>발행 취소</b>를 누르면 짝이 맞춰져요. (남은 확인 ${voidTodo}건)</p>` : ''}
   ${pagerHtml(list.length)}
   ${IV.kind === 'buy' ? batchesHtml() : ''}
   <datalist id="vendorNames">${VENDORS.map(v => `<option value="${esc(v.name)}">`).join('')}</datalist>`;
@@ -1906,7 +1920,7 @@ function invRowHtml(i) {
   else if (i.status === 'unpaid') act = `<button class="btn ghost sm" data-iv="manualpaid" data-id="${esc(i.id)}">${i.kind === 'sell' ? '입금 체크' : '기지급 체크'}</button> <button class="btn ghost sm" data-iv="exclude" data-id="${esc(i.id)}">${L.excluded}</button>`;
   else if (i.voided) act = `<button class="btn ghost sm" data-iv="undo" data-id="${esc(i.id)}">취소 해제</button>`;
   else if (i.status === 'paid' || i.status === 'excluded') act = `<button class="btn ghost sm" data-iv="undo" data-id="${esc(i.id)}">되돌리기</button>`;
-  if ((i.status === 'unpaid' || i.status === 'review') && !i.voided) act += ` <button class="btn ghost sm" data-iv="void" data-id="${esc(i.id)}" title="잘못 발행된 계산서 (이체하지 않음)">발행 취소</button>`;
+  if ((i.status === 'unpaid' || i.status === 'review' || i.status === 'planned') && !i.voided) act += ` <button class="btn ghost sm" data-iv="void" data-id="${esc(i.id)}" title="잘못 발행된 계산서 (이체하지 않음)">발행 취소</button>`;
   const voidHint = IV.voidCands && IV.voidCands.has(i.id) ? '<div class="diff" style="font-size:11.5px">같은 금액 마이너스 계산서가 있어요 · 발행 취소 건일 수 있어요</div>' : '';
   const canSel = i.kind === 'buy' && i.status === 'unpaid';
   return `<tr class="${i.voided ? 'voided' : ''}">
@@ -1919,7 +1933,7 @@ function invRowHtml(i) {
     <td><div class="icell" title="${esc(i.item || '')}">${esc(i.item || '')}</div></td>
     <td class="num">${i.type === '수기' && i.status === 'unpaid' ? `<input class="in num" style="width:110px" data-iv="total" data-id="${esc(i.id)}" value="${wonOrBlank(i.total)}" placeholder="금액 입력">` : `<b>${won(i.total)}</b>`}</td>
     <td style="white-space:nowrap">${i.approval ? `<label class="okC" title="${esc(i.approval.by)}"><input type="checkbox" data-iv="approval" data-id="${esc(i.id)}" checked> ${esc(initialOf(i.approval.by))} · ${esc(shortTime(i.approval.at))}</label>` : `<input type="checkbox" data-iv="approval" data-id="${esc(i.id)}" aria-label="품의서 확인">`}</td>
-    <td class="${cls}" style="white-space:nowrap"><b>${i.voided ? '발행 취소' : (L[i.status] || '-')}</b>${i.lock && i.status !== 'review' ? ' <span class="hint">(직접)</span>' : ''}</td>
+    <td class="${cls}" style="white-space:nowrap"><b>${i.voided ? '발행 취소' : (L[i.status] || '-')}</b>${i.lock && i.status !== 'review' && !i.voided ? ' <span class="hint">(직접)</span>' : ''}</td>
     <td class="hint" style="max-width:260px">${voidHint}${esc(i.status === 'excluded' ? (i.manualNote || '') : (i.matchText || ''))}${i.matchType === 'manual' ? (i.bankMatch ? ' <span class="okC"><b>· 은행 내역 일치 ✓</b></span>' : ' <span class="diff">· 은행 내역 없음</span>') : ''}</td>
     <td><input class="in" style="width:96px" data-iv="account" data-id="${esc(i.id)}" value="${esc(i.account || '')}"></td>
     ${i.kind === 'buy' ? `<td><input class="in" style="width:140px" data-iv="memo" data-id="${esc(i.id)}" value="${esc(i.memo || '')}" placeholder="${esc(String(i.item || '').slice(0, 20))}"></td>` : ''}
@@ -2022,7 +2036,15 @@ ivEl.addEventListener('click', async e => {
       const note = prompt('미지급외 처리 사유를 적어 주세요', ''); if (note === null) return;
       return busy(async () => { await setInv(inv, { status: 'excluded', manualNote: note, lock: true }); renderInv(); });
     }
-    if (act === 'void') { if (!confirm(`${inv.vendorName} ${won(inv.total)}원 계산서를 발행 취소(이체하지 않음)로 표시할까요?`)) return; return busy(async () => { await setInv(inv, { status: 'excluded', lock: true, voided: true, manualNote: '발행 취소 (잘못 발행)', batchId: null }); IV.sel.delete(inv.id); toast('발행 취소로 표시했어요. 다시 올려도 이 표시는 유지돼요'); renderInv(); }); }
+    if (act === 'void') {
+      const b = inv.status === 'planned' && inv.batchId ? IV.batches.find(x => x.id === inv.batchId) : null;
+      if (!confirm(`${inv.vendorName} ${won(inv.total)}원 계산서를 발행 취소(이체하지 않음)로 표시할까요?` + (b ? `\n\n이 건은 ${b.date} 대량이체 묶음에 들어 있어요. 묶음에서 빼고 합계를 다시 계산해요.\n이미 은행에 파일을 올렸다면 은행에서도 이 건을 빼 주세요.` : ''))) return;
+      return busy(async () => {
+        if (b) { const items = b.items.filter(x => x.invId !== inv.id), total = items.reduce((s, x) => s + num(x.amt), 0); await db.collection('batches').doc(b.id).update({ items, total }); Object.assign(b, { items, total }); }
+        await setInv(inv, { status: 'excluded', lock: true, voided: true, manualNote: '발행 취소 (잘못 발행)', batchId: null });
+        IV.sel.delete(inv.id); await doMatch(true); toast(b ? '발행 취소로 표시하고 대량이체 묶음에서 뺐어요. 파일을 다시 받아 주세요' : '발행 취소로 표시했어요. 다시 올려도 이 표시는 유지돼요'); renderInv();
+      });
+    }
     if (act === 'undo') return busy(async () => {
       if (inv.voided) await setInv(inv, { voided: false });
       const rej = inv.matchTxIds && inv.matchTxIds.length && !inv.lock ? [...(inv.rejectTx || []), ...inv.matchTxIds] : (inv.rejectTx || []);
