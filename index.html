@@ -917,7 +917,7 @@ function showSugg(input) {
   const v = input.value.trim();
   if (v.length < 2) return hideSugg();
   const low = v.toLowerCase();
-  const src = input.dataset.suggest === 'vendors' ? [...new Set((VENDORS || []).flatMap(v => [v.name, ...(v.aliases || [])]).filter(Boolean))] : labelHints();
+  const src = input.dataset.suggest === 'vendors' ? [...new Set([...(VENDORS || []).flatMap(v => [v.name, ...(v.aliases || [])]), ...((typeof IV !== 'undefined' && IV.invs) || []).map(i => i.vendorName)].filter(Boolean))] : labelHints();
   const items = src.filter(x => x.toLowerCase().includes(low) && x !== v)
     .sort((a, b) => (a.toLowerCase().indexOf(low) - b.toLowerCase().indexOf(low)) || a.length - b.length).slice(0, 8);
   if (!items.length) return hideSugg();
@@ -2467,8 +2467,8 @@ async function renderVendors() {
       const d = dups.get(v.id);
       return `<tr><td class="vcell"><div class="vname" title="${esc(v.name)}">${esc(v.name)}</div>${(v.aliases || []).length ? `<div class="vsub">${esc(v.aliases.join(', '))}</div>` : ''}</td>
         <td class="dcell main">${miss((v.bizNos || []).map(fmtBiz).join(', '))}</td>
-        <td style="white-space:nowrap">${v.bankCode || v.bank ? `${esc(bankNameOf(v.bankCode) || v.bank)} <span class="hint">${esc(v.bankCode || '')}</span>` : '<span class="missing">미입력</span>'}</td>
-        <td class="dcell main">${miss(v.acct)}</td><td>${miss(v.holder)}</td>
+        <td style="white-space:nowrap">${v.autoPay && !v.acct ? '<span class="tag cash">자동이체</span>' : v.bankCode || v.bank ? `${esc(bankNameOf(v.bankCode) || v.bank)} <span class="hint">${esc(v.bankCode || '')}</span>` : '<span class="missing">미입력</span>'}</td>
+        <td class="dcell main">${v.autoPay && !v.acct ? '<span class="hint">-</span>' : miss(v.acct)}</td><td>${v.autoPay && !v.holder ? '<span class="hint">-</span>' : miss(v.holder)}</td>
         <td>${d ? `<span class="tag" style="background:var(--gold-soft);color:var(--gold-deep)">${esc(d.join('·'))} 중복</span>` : ''}</td>
         <td style="white-space:nowrap"><button class="btn sm" data-vedit="${v.id}">수정</button> <button class="btn ghost sm" data-vdel="${v.id}">삭제</button></td></tr>`;
     }).join('') || `<tr><td colspan="7" class="empty">${VENDORS.length ? '검색 결과가 없어요.' : '등록된 거래처가 없어요. 지금 쓰시는 계좌번호 엑셀을 일괄 등록하세요.'}</td></tr>`}</tbody></table></div>
@@ -2476,7 +2476,7 @@ async function renderVendors() {
   </div>`;
 }
 function vendorDialog(v) {
-  const isNew = !v; v = v || { name: '', bizNos: [], bank: '', bankCode: '', acct: '', holder: '', aliases: [], outNames: [], inNames: [], account: '' };
+  const isNew = !v; v = v || { name: '', bizNos: [], bank: '', bankCode: '', acct: '', holder: '', aliases: [], outNames: [], inNames: [], account: '', autoPay: false };
   const code = v.bankCode || bankCodeOf(v.bank, '');
   const bankOpts = BANK_LIST.map(([n, c]) => `<option value="${c}" ${c === code ? 'selected' : ''}>${n} (${c})</option>`).join('');
   const bg = document.createElement('div'); bg.className = 'modal-bg';
@@ -2489,6 +2489,7 @@ function vendorDialog(v) {
       <label><span class="req">은행</span><select class="in" id="vfBank"><option value="">은행 선택</option>${bankOpts}</select></label>
       <label><span class="req">계좌번호</span><input class="in" id="vfAcct" value="${esc(v.acct || '')}" placeholder="숫자와 - 만"></label>
     </div>
+    <label class="row hint" style="margin-top:10px"><input type="checkbox" id="vfAuto" ${v.autoPay ? 'checked' : ''}> 자동이체로만 나가는 업체 (계좌 없이 등록 · 은행·계좌·예금주는 선택)</label>
     <div id="vfDup"></div>
     <details style="margin-top:12px"><summary class="hint" style="cursor:pointer">추가 정보 (선택)</summary>
       <div class="vform" style="margin-top:10px">
@@ -2507,6 +2508,8 @@ function vendorDialog(v) {
   };
   const showDup = () => { const o = others(); g('vfDup').innerHTML = o.length ? `<div class="dupwarn">이미 등록된 거래처가 있어요: ${o.map(esc).join(', ')}</div>` : ''; };
   g('vfBiz').oninput = showDup; g('vfAcct').oninput = showDup; showDup();
+  const reqToggle = () => bg.querySelectorAll('#vfHolder, #vfBank, #vfAcct').forEach(x => x.closest('label').querySelector('span').className = g('vfAuto').checked ? '' : 'req');
+  g('vfAuto').onchange = reqToggle; reqToggle();
   g('vfName').focus();
   const close = () => bg.remove();
   g('vfCancel').onclick = close; backdropClose(bg, close);
@@ -2515,9 +2518,9 @@ function vendorDialog(v) {
     const data = {
       name: g('vfName').value.trim(), bizNos: list(g('vfBiz').value).map(fmtBiz), holder: g('vfHolder').value.trim(),
       bankCode: g('vfBank').value, bank: bankNameOf(g('vfBank').value), acct: g('vfAcct').value.trim(),
-      aliases: list(g('vfAlias').value), outNames: list(g('vfOut').value).map(learnName), inNames: list(g('vfIn').value).map(learnName), account: g('vfAcc').value.trim()
+      autoPay: g('vfAuto').checked, aliases: list(g('vfAlias').value), outNames: list(g('vfOut').value).map(learnName), inNames: list(g('vfIn').value).map(learnName), account: g('vfAcc').value.trim()
     };
-    const need = [['거래처명', data.name], ['사업자번호', data.bizNos.length], ['예금주', data.holder], ['은행', data.bankCode], ['계좌번호', data.acct]].filter(x => !x[1]).map(x => x[0]);
+    const need = [['거래처명', data.name], ['사업자번호', data.bizNos.length], ...(data.autoPay ? [] : [['예금주', data.holder], ['은행', data.bankCode], ['계좌번호', data.acct]])].filter(x => !x[1]).map(x => x[0]);
     if (need.length) return toast(`${need.join(', ')}을(를) 입력해 주세요`);
     if (data.bizNos.some(b => bizKey(b).length !== 10)) return toast('사업자번호는 숫자 10자리예요');
     const o = others(); if (o.length && !confirm(`이미 등록된 거래처가 있어요:\n${o.join('\n')}\n\n그래도 저장할까요?`)) return;
@@ -2733,7 +2736,7 @@ function apDialog(ap) {
       <label>출금 계좌<select class="in" id="apAcct"><option value="">전체 계좌</option>${S.accounts.map(a => `<option value="${a.acct6}" ${a.acct6 === ap.acct6 ? 'selected' : ''}>${esc(accName(a))}</option>`).join('')}</select></label>
       <label>출금일 (매월)<input class="in" id="apDay" inputmode="numeric" value="${esc(ap.day || '')}" placeholder="같은 업체가 여러 건이면 꼭 입력"></label>
       <label class="full">일보에 들어갈 내역<input class="in" id="apLabel" data-suggest value="${esc(ap.label || '')}" placeholder="예: 학원_본관 전기료 (비우면 은행 내역 그대로)"></label>
-      <label>연결할 거래처<input class="in" id="apVendor" data-suggest="vendors" value="${esc(v ? v.name : '')}" placeholder="세금계산서 매칭에 쓰여요"></label>
+      <label>연결할 거래처<input class="in" id="apVendor" data-suggest="vendors" value="${esc(v ? v.name : '')}" placeholder="세금계산서 상호 (없으면 새로 등록돼요)"></label>
       <label>계정명<input class="in" id="apAccount" value="${esc(ap.account || '')}" placeholder="예: 통신비"></label>
       <label class="full">메모<input class="in" id="apMemo" value="${esc(ap.memo || '')}"></label>
     </div>
@@ -2743,14 +2746,25 @@ function apDialog(ap) {
   g('apCancel').onclick = close; backdropClose(bg, close); g('apName').focus();
   g('apOk').onclick = () => busy(async () => {
     const vn = g('apVendor').value.trim(), vv = vn ? VENDORS.find(x => x.name === vn) || VENDORS.find(x => normName(x.name) === normName(vn)) : null;
-    if (vn && !vv) return toast('연결할 거래처를 목록에서 골라 주세요');
-    const data = { name: g('apName').value.trim(), match: g('apMatch').value.trim(), acct6: g('apAcct').value, day: Math.min(31, num(g('apDay').value)) || '', vendorId: vv ? vv.id : '', account: g('apAccount').value.trim(), memo: g('apMemo').value.trim(), label: g('apLabel').value.trim(), updatedAt: TS(), by: S.user.email };
+    if (!g('apName').value.trim() || !g('apMatch').value.trim()) return toast('업체명과 은행 내역에 찍히는 이름을 입력해 주세요');
+    let link = vv;
+    if (vn && !vv) {
+      // 세금계산서에 같은 이름이 있으면 사업자번호도 가져와요
+      const nn = normName(vn); let biz = '';
+      const fromIv = (IV.invs || []).find(i => normName(i.vendorName) === nn);
+      if (fromIv) biz = fromIv.vendorBiz; else { const q = await db.collection('invoices').where('vendorName', '==', vn).limit(1).get(); q.forEach(d => biz = d.data().vendorBiz || ''); }
+      if (!confirm(`‘${vn}’은(는) 거래처 목록에 없어요.\n계좌 없이 자동이체 거래처로 새로 등록하고 연결할까요?${biz ? `\n(세금계산서의 사업자번호 ${fmtBiz(biz)}도 함께 넣을게요)` : ''}`)) return;
+      const ref = db.collection('vendors').doc();
+      const nv = { name: vn, bizNos: biz ? [fmtBiz(biz)] : [], bank: '', bankCode: '', acct: '', holder: '', aliases: [], outNames: [], inNames: [], account: g('apAccount').value.trim(), autoPay: true, createdAt: TS(), by: S.user.email };
+      await ref.set(nv); link = { id: ref.id, ...nv }; VENDORS.push(link); refreshBizMap();
+    }
+    const data = { name: g('apName').value.trim(), match: g('apMatch').value.trim(), acct6: g('apAcct').value, day: Math.min(31, num(g('apDay').value)) || '', vendorId: link ? link.id : '', account: g('apAccount').value.trim(), memo: g('apMemo').value.trim(), label: g('apLabel').value.trim(), updatedAt: TS(), by: S.user.email };
     if (!data.name || !data.match) return toast('업체명과 은행 내역에 찍히는 이름을 입력해 주세요');
     const same = AP.list.filter(x => x.id !== ap.id && (x.acct6 || '') === data.acct6 && apNames(x).some(n => apNames(data).includes(n)) && String(x.day || '') === String(data.day || ''));
     if (same.length && !confirm(`같은 계좌·이름·출금일인 자동이체가 이미 있어요: ${same.map(x => x.name).join(', ')}\n출금일을 다르게 하면 구분돼요. 그래도 저장할까요?`)) return;
     if (isNew) { const ref = db.collection('autopays').doc(); await ref.set(data); AP.list.push({ id: ref.id, ...data }); }
     else { await db.collection('autopays').doc(ap.id).update(data); Object.assign(AP.list.find(x => x.id === ap.id), data); }
-    if (vv) { const outN = [...new Set([...(vv.outNames || []), ...apNames(data)])]; if (outN.length !== (vv.outNames || []).length) { vv.outNames = outN; await db.collection('vendors').doc(vv.id).update({ outNames: outN }); refreshBizMap(); IV.invs = null; } }
+    if (link) { const outN = [...new Set([...(link.outNames || []), ...apNames(data)])]; if (outN.length !== (link.outNames || []).length) { link.outNames = outN; await db.collection('vendors').doc(link.id).update({ outNames: outN }); refreshBizMap(); IV.invs = null; } }
     close(); toast('저장했어요'); renderSettings();
   });
 }
