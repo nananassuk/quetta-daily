@@ -145,8 +145,15 @@ details.extra summary{cursor:pointer;font-weight:600;padding:4px 0}
 .sugg div.on,.sugg div:hover{background:var(--teal-soft)}
 .sugg mark{background:none;color:var(--teal-deep);font-weight:700}
 .mrows{display:flex;flex-direction:column;gap:8px}
-.mrows .madd{grid-template-columns:86px 150px auto 120px minmax(280px,1fr) auto}
-.mrows .madd .btn{padding:4px 10px;font-size:12.5px}
+.mrows .madd{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.mrows .madd .gname{width:76px;flex:none}
+.mrows .madd [data-m=item]{width:150px;flex:none}
+.mrows .madd [data-m=acct]{width:130px;flex:none}
+.mrows .madd [data-m=amt]{width:120px;flex:none}
+.mrows .madd [data-m=label]{flex:1 1 320px;min-width:200px}
+.mrows .madd .btn{flex:none;width:auto;padding:6px 12px;font-size:13px;line-height:1.3}
+.pdin{width:128px;padding:4px 6px;font-size:12.5px}
+.pdin.pdset{background:var(--gold-soft);border-color:#E8DA9A;font-weight:600}
 .mrows .madd .gname{font-weight:700;color:var(--teal-deep);font-size:13px}
 @media (max-width:760px){.mrows .madd{grid-template-columns:1fr 1fr}}
 .newb{display:inline-block;font-size:10.5px;font-weight:800;color:#fff;background:var(--teal);border-radius:4px;padding:0 5px;vertical-align:1px}
@@ -210,7 +217,6 @@ details.extra summary{cursor:pointer;font-weight:600;padding:4px 0}
       <button data-view="day">일보</button>
       <button data-view="txns">거래내역</button>
       <button data-view="vpay">업체별 이체</button>
-      <button data-view="auto">자동이체·예약</button>
       <button data-view="upload">업로드</button>
       <button data-view="inv">세금계산서</button>
       <button data-view="vendors">거래처</button>
@@ -224,7 +230,6 @@ details.extra summary{cursor:pointer;font-weight:600;padding:4px 0}
     <section id="v-day"></section>
     <section id="v-txns" hidden></section>
     <section id="v-vpay" hidden></section>
-    <section id="v-auto" hidden></section>
     <section id="v-upload" hidden></section>
     <section id="v-export" hidden></section>
     <section id="v-settings" hidden></section>
@@ -762,8 +767,8 @@ document.getElementById('nav').addEventListener('click', e => { const b = e.targ
 function go(v) {
   S.view = v;
   document.querySelectorAll('#nav button').forEach(b => b.setAttribute('aria-current', b.dataset.view === v));
-  ['day', 'txns', 'vpay', 'auto', 'upload', 'export', 'settings', 'inv', 'vendors'].forEach(k => $('#v-' + k).hidden = k !== v);
-  ({ day: renderDay, txns: renderTxns, upload: renderUpload, export: renderExport, settings: renderSettings, inv: renderInv, vendors: renderVendors, vpay: renderVpay, auto: renderAuto })[v]();
+  ['day', 'txns', 'vpay', 'upload', 'export', 'settings', 'inv', 'vendors'].forEach(k => $('#v-' + k).hidden = k !== v);
+  ({ day: renderDay, txns: renderTxns, upload: renderUpload, export: () => { PF.all = null; renderExport(); }, settings: renderSettings, inv: renderInv, vendors: renderVendors, vpay: renderVpay })[v]();
 }
 
 /* =========================================================
@@ -1358,9 +1363,10 @@ async function loadHistory() {
 /* =========================================================
    엑셀 다운로드
    ========================================================= */
-function renderExport() {
+async function renderExport() {
+  if (!PF.all) await busy(loadPayFileList);
   const e = S.exp, el = $('#v-export');
-  el.innerHTML = `<div class="panel">
+  el.innerHTML = `${PF.all ? payFileHtml() : ''}<div class="panel">
     <h2>자금일보 엑셀 다운로드</h2>
     <p class="hint">지금 쓰시는 자금일보 양식 그대로 만들어요. 날짜마다 시트가 하나씩 생기고, 전일이월은 앞 시트와 수식으로 이어집니다.</p>
     <div class="seg" id="expMode">${[['day', '하루'], ['range', '기간'], ['month', '월 전체']].map(([k, l]) => `<button data-m="${k}" aria-pressed="${e.mode === k}">${l}</button>`).join('')}</div>
@@ -1427,7 +1433,8 @@ async function saveWb(wb, name) {
    ========================================================= */
 async function renderSettings() {
   const el = $('#v-settings'), ym = S.openYm;
-  await busy(() => getMonth(ym));
+  await busy(() => Promise.all([getMonth(ym), loadAutoData()]));
+  if (!MCFG) MCFG = clone(DEFAULT_MATCH);
   const op = S.months[ym].opening || {};
   const v = x => wonOrBlank(x);
   const ruleRows = Object.entries(S.rules).sort((a, b) => a[1].label.localeCompare(b[1].label));
@@ -1447,6 +1454,9 @@ async function renderSettings() {
     </div>
     <div class="row" style="margin-top:12px"><button class="btn primary" id="opSave">이월잔액 저장하기</button></div>
   </div>
+
+  ${payDaySettingsHtml()}
+  ${autoSettingsHtml()}
 
   <div class="panel">
     <h2>자동 묶기 (카드 입금 · 환불 출금)</h2>
@@ -1794,8 +1804,9 @@ async function doMatch(silent) {
   for (const [id, p] of r.batch) { ops.push(b => b.update(db.collection('batches').doc(id), p)); Object.assign(IV.batches.find(x => x.id === id), p); }
   await commitBatches(ops);
   if (!silent) toast(r.inv.size ? `${r.inv.size}건의 상태가 바뀌었어요` : '새로 맞춰진 건이 없어요');
+  refreshDue();
 }
-async function setInv(inv, p) { await db.collection('invoices').doc(inv.id).update(p); Object.assign(inv, p); }
+async function setInv(inv, p) { await db.collection('invoices').doc(inv.id).update(p); Object.assign(inv, p); refreshDue(); }
 async function learnVendorName(inv, tx) {
   const v = vendorOf(inv); if (!v || !tx) return;
   const n = learnName(tx.party || tx.memo1); if (n.length < 2) return;
@@ -1816,7 +1827,7 @@ async function renderInv() {
   const newCount = all.filter(isNew).length;
   const sk = IV.sortBy;
   const list = all.filter(i => (IV.status === 'all' || i.status === IV.status) && (!IV.onlyNew || isNew(i)) && (!q || [i.vendorName, i.item, i.note, i.account, i.memo].some(x => String(x || '').toLowerCase().includes(q))))
-    .sort((a, b) => String(a[sk] || a.date || '').localeCompare(String(b[sk] || b.date || '')) || String(a.vendorName).localeCompare(String(b.vendorName)));
+    .sort((a, b) => String(sk === 'pd' ? payDateOf(a) : (a[sk] || a.date || '')).localeCompare(String(sk === 'pd' ? payDateOf(b) : (b[sk] || b.date || ''))) || String(a.vendorName).localeCompare(String(b.vendorName)));
   const sumBy = st => all.filter(i => i.status === st).reduce((s, i) => s + num(i.total), 0);
   const cntBy = st => all.filter(i => i.status === st).length;
   const unlinked = [...new Map(all.filter(i => i.type !== '수기' && !vendorOf(i)).map(i => [bizKey(i.vendorBiz), i])).values()];
@@ -1850,14 +1861,14 @@ async function renderInv() {
   </div>
   <div class="row" style="margin-bottom:10px">
     <div class="seg" id="ivStatus">${statuses.map(s => `<button data-s="${s}" aria-pressed="${IV.status === s}">${s === 'all' ? '전체' : L[s]}</button>`).join('')}</div>
-    <select class="in" id="ivSort" aria-label="정렬 기준">${[['date', '작성일자순'], ['issueDate', '발급일자순'], ['sendDate', '전송일자순']].map(([k, l]) => `<option value="${k}" ${IV.sortBy === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
+    <select class="in" id="ivSort" aria-label="정렬 기준">${[['date', '작성일자순'], ['issueDate', '발급일자순'], ['sendDate', '전송일자순'], ...(IV.kind === 'buy' ? [['pd', '예약이체일순']] : [])].map(([k, l]) => `<option value="${k}" ${IV.sortBy === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
     ${newCount ? `<label class="row hint"><input type="checkbox" id="ivOnlyNew" ${IV.onlyNew ? 'checked' : ''}> 이번 업로드만 보기 (<b class="inC">NEW ${newCount}건</b>)</label>` : ''}
     <input class="in" id="ivQ" style="flex:1;min-width:200px" placeholder="거래처·품목·계정명 검색" value="${esc(IV.q)}">
   </div>
   ${IV.sel.size ? `<div class="toolbar"><span>${IV.sel.size}건 · ${won(selSum)}원 선택</span><span class="spacer"></span><button class="btn sm" id="ivMakeBatch">대량이체 파일 만들기</button><button class="btn sm" id="ivSelClear">선택 해제</button></div>` : ''}
   <div class="panel" style="padding:0"><div class="scroll"><table class="t ivt">
-    <thead><tr>${IV.kind === 'buy' ? `<th><input type="checkbox" id="ivSelAll" aria-label="미지급 전체 선택"></th>` : ''}<th>작성</th><th>발급</th><th>전송</th><th>거래처</th><th>품목</th><th class="num">합계금액</th><th>품의서</th><th>상태</th><th>매칭 내역</th><th>계정명</th>${IV.kind === 'buy' ? '<th>이체 메모</th>' : ''}<th></th></tr></thead>
-    <tbody>${list.length ? list.map(invRowHtml).join('') : `<tr><td colspan="14" class="empty">${all.length ? '조건에 맞는 계산서가 없어요.' : '이 달 세금계산서가 아직 없어요. 위에서 세금계산서 엑셀을 업로드하세요.'}</td></tr>`}</tbody>
+    <thead><tr>${IV.kind === 'buy' ? `<th><input type="checkbox" id="ivSelAll" aria-label="미지급 전체 선택"></th>` : ''}<th>작성</th><th>발급</th><th>전송</th>${IV.kind === 'buy' ? '<th>예약이체</th>' : ''}<th>거래처</th><th>품목</th><th class="num">합계금액</th><th>품의서</th><th>상태</th><th>매칭 내역</th><th>계정명</th>${IV.kind === 'buy' ? '<th>이체 메모</th>' : ''}<th></th></tr></thead>
+    <tbody>${list.length ? list.map(invRowHtml).join('') : `<tr><td colspan="15" class="empty">${all.length ? '조건에 맞는 계산서가 없어요.' : '이 달 세금계산서가 아직 없어요. 위에서 세금계산서 엑셀을 업로드하세요.'}</td></tr>`}</tbody>
   </table></div></div>
   ${IV.kind === 'buy' ? batchesHtml() : ''}
   <datalist id="vendorNames">${VENDORS.map(v => `<option value="${esc(v.name)}">`).join('')}</datalist>`;
@@ -1876,6 +1887,7 @@ function invRowHtml(i) {
     ${i.kind === 'buy' ? `<td>${canSel ? `<input type="checkbox" data-iv="sel" data-id="${esc(i.id)}" ${IV.sel.has(i.id) ? 'checked' : ''} aria-label="선택">` : ''}</td>` : ''}
     <td class="dcell main" title="${esc(i.date || '')}">${md(i.date)}${IV.lastUpload && i.uploadId === IV.lastUpload.id ? ' <span class="newb">NEW</span>' : ''}</td>
     <td class="dcell" title="${esc(i.issueDate || '')}">${md(i.issueDate)}</td><td class="dcell" title="${esc(i.sendDate || '')}">${md(i.sendDate)}</td>
+    ${i.kind === 'buy' ? `<td>${i.status === 'paid' || i.status === 'excluded' ? `<span class="dcell">${md(payDateOf(i))}</span>` : `<input type="date" class="in pdin ${i.payDate ? 'pdset' : ''}" data-iv="paydate" data-id="${esc(i.id)}" value="${payDateOf(i)}" title="${i.payDate ? '직접 바꾼 날짜예요. 비우면 원래 날짜로 돌아가요' : (vendorOf(i) && vendorOf(i).payDay ? `업체 이체일: 매월 ${vendorOf(i).payDay}일` : '기본 이체일')}">`}</td>` : ''}
     <td class="vcell"><div class="vname" title="${esc(i.vendorName)}">${esc(i.vendorName)}${i.type === '수기' ? ' <span class="tag cash">수기</span>' : ''}</div>
       <div class="vsub">${i.kind === 'buy' ? (bk ? esc(`${bankNameOf(bk.code)} ${bk.acct}`) : '<span class="warnt">계좌 없음</span>') : esc(i.ourName || '')}${!v && i.type !== '수기' ? ' · <span class="warnt">미연결</span>' : ''}</div></td>
     <td><div class="icell" title="${esc(i.item || '')}">${esc(i.item || '')}</div></td>
@@ -2020,6 +2032,7 @@ ivEl.addEventListener('change', async e => {
     toast('저장했어요');
   }
   if (act === 'memo') { await setInv(inv, { memo: t.value.trim() }); toast('저장했어요'); }
+  if (act === 'paydate') { const auto = payDateOf({ ...inv, payDate: null }); const v = t.value && t.value !== auto ? t.value : null; await setInv(inv, { payDate: v }); toast(v ? '예약이체일을 바꿨어요' : '원래 예약이체일로 돌렸어요'); refreshDue(); return renderInv(); }
   if (act === 'total') { await setInv(inv, { total: num(t.value) }); toast('저장했어요'); await doMatch(true); renderInv(); }
 });
 ivEl.addEventListener('input', e => { if (e.target.id === 'ivQ') { IV.q = e.target.value; clearTimeout(IV.qt); IV.qt = setTimeout(() => { renderInv().then(() => { const q = $('#ivQ'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }); }, 300); } });
@@ -2288,11 +2301,13 @@ async function exportInvList(silent) {
 /* =========================================================
    업체별 이체내역
    ========================================================= */
-const VP = { name: '', from: addDays(today(), -364), to: today(), dir: 'out', rows: null };
+const VP = { tab: 'pay', name: '', from: addDays(today(), -364), to: today(), dir: 'out', rows: null };
 async function renderVpay() {
-  await busy(() => loadVendorsCfg());
+  await busy(async () => { await loadVendorsCfg(); if (VP.tab === 'auto') { await loadAutoData(); await loadAutoTxns(); } });
   const el = $('#v-vpay'), r = VP.rows;
-  el.innerHTML = `<div class="panel">
+  const tabs = `<div class="dayhead" style="margin-bottom:12px"><h1>업체별 이체</h1><div class="seg" id="vpTab"><button data-t="pay" aria-pressed="${VP.tab === 'pay'}">업체별 이체내역</button><button data-t="auto" aria-pressed="${VP.tab === 'auto'}">자동이체 현황</button></div></div>`;
+  if (VP.tab === 'auto') { el.innerHTML = tabs + autoStatusHtml(); return; }
+  el.innerHTML = tabs + `<div class="panel">
     <h2>업체별 이체내역</h2>
     <p class="hint">업체명을 넣으면 기간 동안 그 업체로 나간(또는 들어온) 돈을 모두 모아 보여줘요. 대량이체로 함께 보낸 건도 묶음 안에서 찾아 포함해요.</p>
     <div class="row">
@@ -2373,6 +2388,7 @@ async function exportVpay() {
 const vpEl = document.getElementById('v-vpay');
 vpEl.addEventListener('click', e => {
   const t = e.target;
+  const tb = t.closest('#vpTab button'); if (tb) { VP.tab = tb.dataset.t; return renderVpay(); }
   const q = t.closest('[data-vq]');
   if (q) { const y = new Date().getFullYear(); if (q.dataset.vq === '1y') { VP.from = addDays(today(), -364); VP.to = today(); } else if (q.dataset.vq === 'ty') { VP.from = `${y}-01-01`; VP.to = today(); } else { VP.from = `${y - 1}-01-01`; VP.to = `${y - 1}-12-31`; } VP.name = $('#vpName').value; return renderVpay(); }
   const d = t.closest('#vpDir button'); if (d) { VP.dir = d.dataset.d; VP.name = $('#vpName').value; return renderVpay(); }
@@ -2543,9 +2559,9 @@ async function saveVendorImport() {
 </script>
 <script>
 /* =========================================================
-   자동이체 현황 · 이체 예약 · 당일 알림
+   자동이체 (설정 · 업체별 이체 탭) · 예약이체일 · 알림 · 이체일별 파일
    ========================================================= */
-const AP = { tab: 'sched', months: 6, list: null, scheds: null, txns: null, txFrom: null, recos: null };
+const AP = { months: 6, list: null, txns: null, txFrom: null, recos: null };
 const AUTO_MEMO = /FBS|지로|CMS|자동|펌뱅킹|공과금|납부/;
 const ymAdd = (ym, n) => { const [y, m] = ym.split('-').map(Number); const d = new Date(y, m - 1 + n, 1); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
 const lastDay = ym => { const [y, m] = ym.split('-').map(Number); return new Date(y, m, 0).getDate(); };
@@ -2553,114 +2569,66 @@ function prevBizDay(ds) { const d = parseD(ds); const w = d.getDay(); if (w === 
 const apNames = ap => [...new Set([ap.name, ...String(ap.match || '').split(/\s*,\s*/)].map(learnName).filter(n => n.length >= 2))];
 const apHit = (ap, t) => num(t.outAmt) > 0 && (!ap.acct6 || ap.acct6 === t.acct6) && nameHit(apNames(ap), t);
 
+/* ---------- 예약이체일 ---------- */
+// 업체별 이체일(매월 n일)이 있으면 계산서 같은 달 n일 (작성일보다 앞이면 다음 달), 없으면 익월 기본 이체일. 주말이면 전 금요일.
+function payDateOf(inv) {
+  if (inv.kind !== 'buy') return '';
+  if (inv.payDate) return inv.payDate;
+  const base = inv.date || `${inv.ym}-01`, v = vendorOf(inv), day = v && num(v.payDay);
+  if (day) {
+    let ym = base.slice(0, 7), d = `${ym}-${pad(Math.min(day, lastDay(ym)))}`;
+    if (d < base) { ym = ymAdd(ym, 1); d = `${ym}-${pad(Math.min(day, lastDay(ym)))}`; }
+    return prevBizDay(d);
+  }
+  return prevBizDay(nextMonthDay(base, (MCFG || DEFAULT_MATCH).buyDay));
+}
+
+/* ---------- 알림: 예약이체일이 지났는데 기지급이 아닌 매입 계산서 ---------- */
+let _dueT = null;
+function refreshDue() { clearTimeout(_dueT); _dueT = setTimeout(() => loadDue().catch(e => console.error(e)), 400); }
+async function loadDue() {
+  await loadVendorsCfg();
+  const s = await db.collection('invoices').where('status', 'in', ['unpaid', 'review', 'planned']).get();
+  const t = today(), list = [];
+  s.forEach(d => { const i = { id: d.id, ...d.data() }; if (i.kind !== 'buy') return; const pd = payDateOf(i); if (pd && pd <= t) list.push({ ...i, pd }); });
+  list.sort((a, b) => a.pd.localeCompare(b.pd) || String(a.vendorName).localeCompare(b.vendorName));
+  AP.due = list; renderDueBanner();
+}
+function renderDueBanner() {
+  const el = $('#dueBanner'); if (!el) return;
+  const list = AP.due || [];
+  if (!list.length) { el.innerHTML = ''; return; }
+  const t = today(), todayN = list.filter(i => i.pd === t).length, late = list.length - todayN, sum = list.reduce((s, i) => s + num(i.total), 0);
+  const L = { unpaid: '미지급', review: '확인 필요', planned: '이체 예정' };
+  el.innerHTML = `<div class="duebox">
+    <div class="row"><b>🔔 예약이체일이 된 미지급 ${list.length}건</b><span class="hint">${todayN ? `오늘 ${todayN}건` : ''}${todayN && late ? ' · ' : ''}${late ? `<span class="diff">지난 날짜 ${late}건</span>` : ''} · 합계 ${won(sum)}원</span>
+      <span class="spacer"></span><button class="btn sm primary" id="dueGo">세금계산서에서 보기</button><button class="btn sm ghost" id="dueToggle">${AP.dueOpen ? '접기' : '펼치기'}</button></div>
+    ${AP.dueOpen ? `<table class="t ivt" style="margin-top:8px"><tbody>${list.slice(0, 30).map(i => `<tr>
+      <td class="dcell main ${i.pd < t ? 'diff' : ''}">${md(i.pd)}</td><td class="vcell"><div class="vname">${esc(i.vendorName)}</div><div class="vsub">${esc(i.item || '')}</div></td>
+      <td class="num"><b>${won(i.total)}</b></td><td class="hint">${L[i.status] || ''}</td><td class="hint">${esc(i.ym.replace('-', '년 '))}월 계산서</td></tr>`).join('')}</tbody></table>${list.length > 30 ? `<p class="hint">외 ${list.length - 30}건</p>` : ''}` : ''}
+    <p class="hint" style="margin:6px 0 0">기지급으로 바뀌면 알림에서 사라져요. 이체 파일은 <b>엑셀 다운로드 → 이체 파일</b>에서 이체일을 골라 받을 수 있어요.</p></div>`;
+}
+document.addEventListener('click', e => {
+  const t = e.target; if (!t.closest || !t.closest('#dueBanner')) return;
+  if (t.id === 'dueToggle') { AP.dueOpen = !AP.dueOpen; return renderDueBanner(); }
+  if (t.id === 'dueGo') { const first = (AP.due || [])[0]; if (first) { IV.ym = first.ym; IV.kind = 'buy'; IV.status = 'all'; IV.invs = null; } go('inv'); }
+});
+
+/* ---------- 자동이체 데이터 ---------- */
 async function loadAutoData(force) {
   await loadVendorsCfg();
   if (!AP.list || force) {
-    const [a, s, v] = await Promise.all([db.collection('autopays').get(), db.collection('schedules').get(), db.collection('settings').doc('autopayView').get()]);
+    const [a, v] = await Promise.all([db.collection('autopays').get(), db.collection('settings').doc('autopayView').get()]);
     AP.list = []; a.forEach(d => AP.list.push({ id: d.id, ...d.data() })); AP.list.sort((x, y) => String(x.name).localeCompare(y.name));
-    AP.scheds = []; s.forEach(d => AP.scheds.push({ id: d.id, ...d.data() }));
     if (v.exists && v.data().months) AP.months = Math.min(12, Math.max(1, v.data().months));
   }
+}
+async function loadAutoTxns(force) {
   const from = ymAdd(ymOf(today()), -(AP.months - 1)) + '-01';
   if (!AP.txns || force || AP.txFrom > from) {
     const s = await db.collection('txns').where('date', '>=', addDays(from, -31)).where('date', '<=', today()).get();
     AP.txns = []; s.forEach(d => AP.txns.push({ id: d.id, ...d.data() })); AP.txFrom = from;
   }
-}
-
-/* ---------- 이체 예약: 회차 계산 ---------- */
-function occurrences(s, upto) {
-  if (s.type === 'once') return s.date ? [{ key: s.date, due: prevBizDay(s.date) }] : [];
-  const out = [], start = s.startYm || ymOf(today()), end = ymOf(addDays(upto, 7));
-  for (let ym = start, k = 0; ym <= end && k < 24; ym = ymAdd(ym, 1), k++) out.push({ key: ym, due: prevBizDay(`${ym}-${pad(Math.min(num(s.day) || 1, lastDay(ym)))}`) });
-  return out;
-}
-function nextDue(s) { const t = today(); const o = occurrences(s, addDays(t, 40)).find(x => !(s.done || {})[x.key] && x.due >= t); return o ? o.due : ''; }
-function pendingList() {
-  const t = today(), out = [];
-  (AP.scheds || []).filter(s => s.active !== false).forEach(s => occurrences(s, t).forEach(o => { if (o.due <= t && !(s.done || {})[o.key]) out.push({ s, ...o }); }));
-  return out.sort((a, b) => a.due.localeCompare(b.due));
-}
-async function autoMatchSchedules() {
-  const pend = pendingList(); if (!pend.length) return 0;
-  const used = new Set(); (AP.scheds || []).forEach(s => Object.values(s.done || {}).forEach(d => d && d.txId && used.add(d.txId)));
-  let n = 0;
-  for (const p of pend) {
-    const names = [p.s.holder, p.s.name].map(normName).filter(x => x.length >= 2);
-    const t = AP.txns.find(x => !used.has(x.id) && num(x.outAmt) === num(p.s.amount) && x.date >= addDays(p.due, -5) && x.date <= today() && nameHit(names, x));
-    if (!t) continue;
-    used.add(t.id); n++;
-    const val = { how: 'bank', txId: t.id, date: t.date, at: Date.now() };
-    await db.collection('schedules').doc(p.s.id).update(new firebase.firestore.FieldPath('done', p.key), val);
-    p.s.done = { ...(p.s.done || {}), [p.key]: val };
-  }
-  return n;
-}
-
-/* ---------- 당일 알림 ---------- */
-async function refreshDue() {
-  try { await loadAutoData(); await autoMatchSchedules(); } catch (e) { console.error(e); }
-  renderDueBanner();
-}
-function renderDueBanner() {
-  const el = $('#dueBanner'); if (!el) return;
-  const list = pendingList();
-  if (!list.length) { el.innerHTML = ''; return; }
-  const t = today(), todayN = list.filter(p => p.due === t).length, late = list.length - todayN;
-  const sum = list.reduce((s, p) => s + num(p.s.amount), 0);
-  el.innerHTML = `<div class="duebox">
-    <div class="row"><b>🔔 이체할 건이 ${list.length}건 있어요</b><span class="hint">${todayN ? `오늘 ${todayN}건` : ''}${todayN && late ? ' · ' : ''}${late ? `<span class="diff">지난 날짜 ${late}건</span>` : ''} · 합계 ${won(sum)}원</span>
-      <span class="spacer"></span><button class="btn sm primary" id="dueFile">선택한 건 이체 파일 받기</button><button class="btn sm ghost" id="dueToggle">${AP.dueOpen === false ? '펼치기' : '접기'}</button></div>
-    ${AP.dueOpen === false ? '' : `<table class="t ivt" style="margin-top:8px"><tbody>${list.map((p, i) => { const v = p.s.vendorId && vById(p.s.vendorId); return `<tr>
-      <td><input type="checkbox" data-due="${i}" checked aria-label="파일에 넣기"></td>
-      <td class="dcell main ${p.due < t ? 'diff' : ''}">${md(p.due)}</td>
-      <td class="vcell"><div class="vname">${esc(p.s.name)}</div><div class="vsub">${esc(bankNameOf(p.s.bankCode))} ${esc(p.s.acct || '')}${v ? '' : ''}</div></td>
-      <td class="num"><b>${won(p.s.amount)}</b></td><td class="hint">${esc(p.s.memo || '')}</td>
-      <td style="white-space:nowrap"><button class="btn sm" data-duedone="${i}">이체 완료 확인</button></td></tr>`; }).join('')}</tbody></table>`}
-    <p class="hint" style="margin:6px 0 0">통장 내역을 올렸을 때 같은 금액 출금이 있으면 자동으로 완료 처리돼요.</p></div>`;
-  AP.dueList = list;
-}
-document.addEventListener('click', async e => {
-  const t = e.target; if (!t.closest || !t.closest('#dueBanner')) return;
-  if (t.id === 'dueToggle') { AP.dueOpen = AP.dueOpen === false; return renderDueBanner(); }
-  if (t.id === 'dueFile') {
-    const idx = [...document.querySelectorAll('#dueBanner [data-due]')].filter(c => c.checked).map(c => +c.dataset.due);
-    const sel = (AP.dueOpen === false ? AP.dueList.map((_, i) => i) : idx).map(i => AP.dueList[i]).filter(p => p && p.s.acct);
-    if (!sel.length) return toast('계좌가 있는 건을 골라 주세요');
-    return busy(async () => { const wb = new ExcelJS.Workbook(); writeTransferSheet(wb, sel.map(p => ({ code: p.s.bankCode, acct: p.s.acct, amt: num(p.s.amount), holder: p.s.holder || p.s.name, memo: p.s.memo || '' })), (MCFG || DEFAULT_MATCH).myDisplay); await saveWb(wb, `이체예약_${today().replace(/-/g, '')}.xlsx`); });
-  }
-  if (t.dataset.duedone !== undefined) {
-    const p = AP.dueList[+t.dataset.duedone]; if (!p) return;
-    return busy(async () => {
-      const val = { how: 'manual', by: S.user.email, at: Date.now(), date: today() };
-      await db.collection('schedules').doc(p.s.id).update(new firebase.firestore.FieldPath('done', p.key), val);
-      p.s.done = { ...(p.s.done || {}), [p.key]: val }; toast('이체 완료로 확인했어요'); renderDueBanner(); if (S.view === 'auto') renderAuto();
-    });
-  }
-});
-
-/* ---------- 화면 ---------- */
-async function renderAuto() {
-  await busy(() => loadAutoData());
-  const el = $('#v-auto');
-  el.innerHTML = `<div class="dayhead"><h1>자동이체 · 이체 예약</h1>
-    <div class="seg" id="apTab"><button data-t="sched" aria-pressed="${AP.tab === 'sched'}">이체 예약</button><button data-t="auto" aria-pressed="${AP.tab === 'auto'}">자동이체 현황</button></div></div>
-    ${AP.tab === 'sched' ? schedHtml() : autoHtml()}`;
-}
-function schedHtml() {
-  const rows = (AP.scheds || []).slice().sort((a, b) => (nextDue(a) || '9').localeCompare(nextDue(b) || '9'));
-  return `<div class="panel">
-    <div class="row" style="margin-bottom:10px"><h2 style="margin:0">이체 예약 <span class="hint">${rows.length}건</span></h2><span class="spacer"></span><button class="btn primary" id="scAdd">이체 예약 추가</button></div>
-    <p class="hint">희망일이 되면 맨 위에 알림이 뜨고, 그날 건만 모은 국민은행 대량이체 파일을 바로 받을 수 있어요. 주말이면 전 금요일에 알려드려요.</p>
-    <div class="scroll"><table class="t ivt"><thead><tr><th>거래처</th><th class="num">금액</th><th>주기</th><th>다음 이체일</th><th>최근 처리</th><th>이체 메모</th><th></th></tr></thead><tbody>
-    ${rows.map(s => { const done = Object.entries(s.done || {}).sort((a, b) => b[0].localeCompare(a[0]))[0];
-      return `<tr style="${s.active === false ? 'opacity:.5' : ''}"><td class="vcell"><div class="vname">${esc(s.name)}</div><div class="vsub">${esc(bankNameOf(s.bankCode))} ${esc(s.acct || '')}</div></td>
-      <td class="num"><b>${won(s.amount)}</b></td><td>${s.type === 'once' ? `${esc(s.date)} 한 번` : `매월 ${s.day}일`}</td>
-      <td class="dcell main">${esc(nextDue(s) || (s.type === 'once' ? '완료' : ''))}</td>
-      <td class="hint">${done ? `${esc(done[0])} · ${done[1].how === 'bank' ? '<span class="okC">통장 확인 ✓</span>' : `직접 확인 ${esc(initialOf(done[1].by))}`}` : ''}</td>
-      <td class="hint">${esc(s.memo || '')}</td>
-      <td style="white-space:nowrap"><button class="btn sm" data-scedit="${s.id}">수정</button> <button class="btn ghost sm" data-scdel="${s.id}">삭제</button></td></tr>`; }).join('') || '<tr><td colspan="7" class="empty">아직 이체 예약이 없어요.</td></tr>'}
-    </tbody></table></div></div>`;
 }
 function autoMonthsData() {
   const end = ymOf(today()), months = []; for (let i = AP.months - 1; i >= 0; i--) months.push(ymAdd(end, -i));
@@ -2678,19 +2646,30 @@ function autoMonthsData() {
   });
   return { months, rows };
 }
-function autoHtml() {
+// 업체별 이체 화면의 '자동이체 현황' 탭
+function autoStatusHtml() {
   const { months, rows } = autoMonthsData();
   return `<div class="panel">
     <div class="row" style="margin-bottom:10px"><h2 style="margin:0">자동이체 현황 <span class="hint">${AP.list.length}곳</span></h2><span class="spacer"></span>
       <label class="hint row">보여줄 기간 <select class="in" id="apMonths">${Array.from({ length: 12 }, (_, i) => i + 1).map(n => `<option value="${n}" ${n === AP.months ? 'selected' : ''}>최근 ${n}개월</option>`).join('')}</select></label>
-      <button class="btn" id="apReco">은행 내역에서 찾기</button><button class="btn primary" id="apAdd">자동이체 추가</button><button class="btn" id="apDl">엑셀 받기</button></div>
-    <p class="hint">업로드한 통장 내역에서 등록한 이름의 출금을 찾아 달마다 보여줘요. 아래 작은 글씨는 전월 대비 증감이에요.</p>
-    ${AP.recos ? recoHtml() : ''}
-    <div class="scroll"><table class="t ivt"><thead><tr><th>업체</th><th>출금일</th>${months.map(m => `<th class="num">${m.replace('-', '.')}</th>`).join('')}<th></th></tr></thead><tbody>
+      <button class="btn" id="apDl">엑셀 받기</button></div>
+    <p class="hint">업로드한 통장 내역에서 자동이체 출금을 찾아 달마다 보여줘요. 작은 글씨는 전월 대비 증감이에요. 자동이체 목록은 <b>설정 → 자동이체 목록</b>에서 관리해요.</p>
+    <div class="scroll"><table class="t ivt"><thead><tr><th>업체</th><th>출금일</th>${months.map(m => `<th class="num">${m.replace('-', '.')}</th>`).join('')}</tr></thead><tbody>
     ${rows.map(({ ap, cells }) => `<tr><td class="vcell"><div class="vname">${esc(ap.name)}</div><div class="vsub">${esc(apNames(ap).join(', '))}${ap.acct6 ? ' · ' + esc(accNameOf(ap.acct6)) : ''}</div></td>
       <td class="dcell">${ap.day ? `매월 ${ap.day}일` : ''}</td>
-      ${cells.map(c => `<td class="num" style="white-space:nowrap">${c.n ? `<b>${won(c.amt)}</b>${c.n > 1 ? ` <span class="hint">${c.n}건</span>` : ''}<div class="hint" style="font-size:11.5px">${md(c.dates[0])}${c.diff ? ` · <span style="color:${c.diff > 0 ? 'var(--gold-deep)' : 'var(--navy)'}">${c.diff > 0 ? '▲' : '▼'} ${won(Math.abs(c.diff))}</span>` : ''}</div>` : c.missing ? '<span class="diff">미출금</span>' : '<span class="hint">-</span>'}</td>`).join('')}
-      <td style="white-space:nowrap"><button class="btn sm" data-apedit="${ap.id}">수정</button> <button class="btn ghost sm" data-apdel="${ap.id}">삭제</button></td></tr>`).join('') || `<tr><td colspan="${months.length + 3}" class="empty">등록된 자동이체가 없어요. ‘은행 내역에서 찾기’로 한 번에 등록해 보세요.</td></tr>`}
+      ${cells.map(c => `<td class="num" style="white-space:nowrap">${c.n ? `<b>${won(c.amt)}</b>${c.n > 1 ? ` <span class="hint">${c.n}건</span>` : ''}<div class="hint" style="font-size:11.5px">${md(c.dates[0])}${c.diff ? ` · <span style="color:${c.diff > 0 ? 'var(--gold-deep)' : 'var(--navy)'}">${c.diff > 0 ? '▲' : '▼'} ${won(Math.abs(c.diff))}</span>` : ''}</div>` : c.missing ? '<span class="diff">미출금</span>' : '<span class="hint">-</span>'}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${months.length + 2}" class="empty">등록된 자동이체가 없어요. 설정 → 자동이체 목록에서 ‘은행 내역에서 찾기’로 한 번에 등록할 수 있어요.</td></tr>`}
+    </tbody></table></div></div>`;
+}
+// 설정 화면의 '자동이체 목록'
+function autoSettingsHtml() {
+  return `<div class="panel" id="apSettings">
+    <div class="row" style="margin-bottom:6px"><h2 style="margin:0">자동이체 목록 <span class="hint">${AP.list.length}곳</span></h2><span class="spacer"></span>
+      <button class="btn sm" id="apReco">은행 내역에서 찾기</button><button class="btn sm primary" id="apAdd">자동이체 추가</button></div>
+    <p class="hint">여기 등록한 자동이체는 업체별 이체 화면의 ‘자동이체 현황’ 탭에서 달마다 확인할 수 있어요.</p>
+    ${AP.recos ? recoHtml() : ''}
+    <div class="scroll"><table class="t ivt"><thead><tr><th>업체</th><th>은행 표시 이름</th><th>출금 계좌</th><th>출금일</th><th>연결 거래처</th><th></th></tr></thead><tbody>
+    ${AP.list.map(ap => { const v = ap.vendorId && vById(ap.vendorId); return `<tr><td><b>${esc(ap.name)}</b></td><td class="hint">${esc(apNames(ap).join(', '))}</td><td class="hint">${ap.acct6 ? esc(accNameOf(ap.acct6)) : '전체'}</td><td class="dcell">${ap.day ? `매월 ${ap.day}일` : ''}</td><td class="hint">${v ? esc(v.name) : ''}</td>
+      <td style="white-space:nowrap"><button class="btn sm" data-apedit="${ap.id}">수정</button> <button class="btn ghost sm" data-apdel="${ap.id}">삭제</button></td></tr>`; }).join('') || '<tr><td colspan="6" class="empty">등록된 자동이체가 없어요.</td></tr>'}
     </tbody></table></div></div>`;
 }
 function findRecos() {
@@ -2710,10 +2689,8 @@ function recoHtml() {
       ${r.map((g, i) => `<tr><td><input type="checkbox" data-reco="${i}" checked></td><td><b>${esc(g.label)}</b></td><td class="hint">${esc(accNameOf(g.acct6))}</td><td class="num">${g.months.size}</td><td class="num">${won(g.amt / g.n)}</td><td class="dcell">${esc(g.last)}</td></tr>`).join('')}
     </tbody></table></div><div class="row" style="margin-top:8px"><button class="btn primary sm" id="recoSave">선택한 곳 등록하기</button><button class="btn ghost sm" id="recoClose">닫기</button></div>` : '<div class="row" style="margin-top:8px"><span class="hint">새로 찾은 후보가 없어요.</span><button class="btn ghost sm" id="recoClose">닫기</button></div>'}</div>`;
 }
-
-/* ---------- 입력 창 ---------- */
 function apDialog(ap) {
-  const isNew = !ap; ap = ap || { name: '', match: '', acct6: '', day: '', amount: '', vendorId: '', account: '', memo: '' };
+  const isNew = !ap; ap = ap || { name: '', match: '', acct6: '', day: '', vendorId: '', account: '', memo: '' };
   const v = ap.vendorId && vById(ap.vendorId);
   const bg = document.createElement('div'); bg.className = 'modal-bg';
   bg.innerHTML = `<div class="modal" style="width:min(560px,100%)"><h3>자동이체 ${isNew ? '추가' : '수정'}</h3>
@@ -2737,68 +2714,107 @@ function apDialog(ap) {
     if (!data.name || !data.match) return toast('업체명과 은행 내역에 찍히는 이름을 입력해 주세요');
     if (isNew) { const ref = db.collection('autopays').doc(); await ref.set(data); AP.list.push({ id: ref.id, ...data }); }
     else { await db.collection('autopays').doc(ap.id).update(data); Object.assign(AP.list.find(x => x.id === ap.id), data); }
-    if (vv) { const names = apNames(data), outN = [...new Set([...(vv.outNames || []), ...names])]; if (outN.length !== (vv.outNames || []).length) { vv.outNames = outN; await db.collection('vendors').doc(vv.id).update({ outNames: outN }); refreshBizMap(); if (typeof IV !== 'undefined') IV.invs = null; } }
-    close(); toast('저장했어요'); renderAuto();
-  });
-}
-function schedDialog(s) {
-  const isNew = !s; s = s || { vendorId: '', amount: '', memo: '', type: 'monthly', day: 25, date: today(), startYm: ymOf(today()), active: true };
-  const v = s.vendorId && vById(s.vendorId);
-  const bg = document.createElement('div'); bg.className = 'modal-bg';
-  bg.innerHTML = `<div class="modal" style="width:min(560px,100%)"><h3>이체 예약 ${isNew ? '추가' : '수정'}</h3>
-    <div class="vform">
-      <label class="full"><span class="req">거래처</span><input class="in" id="scVendor" data-suggest="vendors" value="${esc(v ? v.name : s.name || '')}" placeholder="거래처 화면에 등록된 이름 (계좌를 거기서 가져와요)"></label>
-      <div class="full hint" id="scBank" style="margin-top:-4px"></div>
-      <label><span class="req">금액</span><input class="in" id="scAmt" inputmode="numeric" value="${wonOrBlank(s.amount)}"></label>
-      <label>이체 메모 (내 통장 표시)<input class="in" id="scMemo" value="${esc(s.memo || '')}" placeholder="예: 학원_정수기 렌탈"></label>
-      <label><span class="req">주기</span><select class="in" id="scType"><option value="monthly" ${s.type !== 'once' ? 'selected' : ''}>매월</option><option value="once" ${s.type === 'once' ? 'selected' : ''}>한 번만</option></select></label>
-      <label id="scDayWrap"><span class="req">매월 며칠</span><input class="in" id="scDay" inputmode="numeric" value="${esc(s.day || '')}"></label>
-      <label id="scDateWrap"><span class="req">이체일</span><input type="date" class="in" id="scDate" value="${esc(s.date || today())}"></label>
-      <label id="scStartWrap">시작 월<input type="month" class="in" id="scStart" value="${esc(s.startYm || ymOf(today()))}"></label>
-      <label class="full row" style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="scActive" ${s.active !== false ? 'checked' : ''}> 사용 중 (끄면 알림이 멈춰요)</label>
-    </div>
-    <div class="row" style="justify-content:flex-end;margin-top:16px"><button class="btn ghost" id="scCancel">취소</button><button class="btn primary" id="scOk">${isNew ? '추가하기' : '저장하기'}</button></div></div>`;
-  document.body.appendChild(bg);
-  const g = id => bg.querySelector('#' + id), close = () => bg.remove();
-  const findV = () => { const n = g('scVendor').value.trim(); return n ? VENDORS.find(x => x.name === n) || VENDORS.find(x => normName(x.name) === normName(n)) : null; };
-  const upd = () => { const once = g('scType').value === 'once'; g('scDayWrap').hidden = once; g('scStartWrap').hidden = once; g('scDateWrap').hidden = !once;
-    const vv = findV(); g('scBank').innerHTML = vv ? (vv.acct ? `<span class="okC">${esc(bankNameOf(vv.bankCode) || vv.bank)} ${esc(vv.acct)} · 예금주 ${esc(vv.holder || vv.name)}</span>` : '<span class="diff">이 거래처는 계좌가 없어요. 거래처 화면에서 먼저 등록해 주세요.</span>') : ''; };
-  g('scType').onchange = upd; g('scVendor').addEventListener('change', upd); g('scVendor').addEventListener('input', upd); upd();
-  g('scCancel').onclick = close; bg.onclick = e => { if (e.target === bg) close(); };
-  g('scOk').onclick = () => busy(async () => {
-    const vv = findV(); if (!vv) return toast('거래처를 목록에서 골라 주세요'); if (!vv.acct) return toast('이 거래처는 계좌가 없어요');
-    const once = g('scType').value === 'once', amt = num(g('scAmt').value), day = Math.min(31, num(g('scDay').value));
-    if (!amt) return toast('금액을 입력해 주세요'); if (!once && !day) return toast('매월 며칠인지 입력해 주세요'); if (once && !g('scDate').value) return toast('이체일을 골라 주세요');
-    const data = { vendorId: vv.id, name: vv.name, holder: vv.holder || vv.name, bankCode: vv.bankCode || bankCodeOf(vv.bank, ''), acct: vv.acct, amount: amt, memo: g('scMemo').value.trim(),
-      type: once ? 'once' : 'monthly', day: once ? '' : day, date: once ? g('scDate').value : '', startYm: once ? '' : g('scStart').value, active: g('scActive').checked, updatedAt: TS(), by: S.user.email };
-    if (isNew) { const ref = db.collection('schedules').doc(); await ref.set({ ...data, done: {} }); AP.scheds.push({ id: ref.id, ...data, done: {} }); }
-    else { await db.collection('schedules').doc(s.id).update(data); Object.assign(AP.scheds.find(x => x.id === s.id), data); }
-    close(); toast('저장했어요'); renderDueBanner(); renderAuto();
+    if (vv) { const outN = [...new Set([...(vv.outNames || []), ...apNames(data)])]; if (outN.length !== (vv.outNames || []).length) { vv.outNames = outN; await db.collection('vendors').doc(vv.id).update({ outNames: outN }); refreshBizMap(); IV.invs = null; } }
+    close(); toast('저장했어요'); renderSettings();
   });
 }
 
-/* ---------- 이벤트 ---------- */
-const apEl = document.getElementById('v-auto');
-apEl.addEventListener('click', e => {
-  const t = e.target;
-  const tb = t.closest('#apTab button'); if (tb) { AP.tab = tb.dataset.t; return renderAuto(); }
-  if (t.id === 'scAdd') return schedDialog(null);
-  if (t.dataset.scedit) return schedDialog(AP.scheds.find(x => x.id === t.dataset.scedit));
-  if (t.dataset.scdel) { const s = AP.scheds.find(x => x.id === t.dataset.scdel); if (!confirm(`${s.name} 이체 예약을 삭제할까요?`)) return; return busy(async () => { await db.collection('schedules').doc(s.id).delete(); AP.scheds = AP.scheds.filter(x => x.id !== s.id); renderDueBanner(); renderAuto(); }); }
-  if (t.id === 'apAdd') return apDialog(null);
-  if (t.dataset.apedit) return apDialog(AP.list.find(x => x.id === t.dataset.apedit));
-  if (t.dataset.apdel) { const a = AP.list.find(x => x.id === t.dataset.apdel); if (!confirm(`${a.name} 자동이체를 목록에서 뺄까요?`)) return; return busy(async () => { await db.collection('autopays').doc(a.id).delete(); AP.list = AP.list.filter(x => x.id !== a.id); renderAuto(); }); }
-  if (t.id === 'apReco') { AP.recos = findRecos(); return renderAuto(); }
-  if (t.id === 'recoClose') { AP.recos = null; return renderAuto(); }
-  if (t.id === 'recoAll') { apEl.querySelectorAll('[data-reco]').forEach(c => c.checked = t.checked); return; }
-  if (t.id === 'recoSave') {
-    const pick = [...apEl.querySelectorAll('[data-reco]')].filter(c => c.checked).map(c => AP.recos[+c.dataset.reco]);
-    if (!pick.length) return toast('등록할 곳을 골라 주세요');
-    return busy(async () => {
-      await commitBatches(pick.map(g => b => { const ref = db.collection('autopays').doc(); const data = { name: g.label, match: g.key, acct6: g.acct6, day: g.day || '', vendorId: '', account: '', memo: '', updatedAt: TS(), by: S.user.email }; AP.list.push({ id: ref.id, ...data }); b.set(ref, data); }));
-      AP.recos = null; toast(`${pick.length}곳을 자동이체로 등록했어요`); renderAuto();
-    });
+/* ---------- 설정: 업체별 이체일 ---------- */
+function payDaySettingsHtml() {
+  const list = (VENDORS || []).filter(v => num(v.payDay)).sort((a, b) => num(a.payDay) - num(b.payDay) || String(a.name).localeCompare(b.name));
+  const bd = (MCFG || DEFAULT_MATCH).buyDay;
+  return `<div class="panel" id="pdSettings">
+    <h2>업체별 이체일</h2>
+    <p class="hint">등록한 업체는 계산서가 나온 <b>같은 달</b> 그날에 이체해요 (계산서가 그 날짜 뒤에 나오면 다음 달). 등록하지 않은 업체는 <b>익월 ${bd}일</b>이에요. 주말이면 전 금요일로 당겨요.</p>
+    <div id="pdList">${list.map(v => `<div class="row" style="margin-bottom:6px"><input class="in" data-pd="name" data-suggest="vendors" style="flex:1;max-width:340px" value="${esc(v.name)}"><span class="hint">매월</span><input class="in" data-pd="day" inputmode="numeric" style="width:64px;text-align:right" value="${v.payDay}"><span class="hint">일</span><button class="btn ghost sm" data-pddel>삭제</button></div>`).join('')}</div>
+    <div class="row" style="margin-top:10px"><button class="btn sm" id="pdAdd">업체 추가</button><button class="btn primary" id="pdSave">이체일 저장하기</button></div></div>`;
+}
+async function savePayDays() {
+  const rows = [...document.querySelectorAll('#pdList .row')].map(r => ({ name: r.querySelector('[data-pd=name]').value.trim(), day: Math.min(31, num(r.querySelector('[data-pd=day]').value)) })).filter(r => r.name);
+  const want = new Map(), miss = [];
+  rows.forEach(r => { const v = VENDORS.find(x => x.name === r.name) || VENDORS.find(x => normName(x.name) === normName(r.name)); if (!v) miss.push(r.name); else if (r.day) want.set(v.id, r.day); });
+  if (miss.length) return toast(`거래처 목록에 없는 이름이 있어요: ${miss.join(', ')}`);
+  const ops = [];
+  VENDORS.forEach(v => { const nd = want.get(v.id) || ''; if (String(v.payDay || '') !== String(nd)) { v.payDay = nd; ops.push(b => b.update(db.collection('vendors').doc(v.id), { payDay: nd })); } });
+  await commitBatches(ops); IV.invs = null; toast(`업체별 이체일을 저장했어요 (${want.size}곳)`); refreshDue(); renderSettings();
+}
+
+/* ---------- 엑셀 다운로드: 이체일별 이체 파일 ---------- */
+const PF = { date: '', list: null };
+async function loadPayFileList() {
+  await loadVendorsCfg();
+  const s = await db.collection('invoices').where('status', '==', 'unpaid').get();
+  const all = []; s.forEach(d => { const i = { id: d.id, ...d.data() }; if (i.kind === 'buy') all.push({ ...i, pd: payDateOf(i) }); });
+  PF.all = all;
+  if (!PF.date) { const t = today(); const up = all.map(i => i.pd).filter(d => d >= t).sort(); PF.date = up[0] || t; }
+}
+function payFileHtml() {
+  const all = PF.all || [], list = all.filter(i => i.pd === PF.date), sum = list.reduce((s, i) => s + num(i.total), 0);
+  const noAcct = list.filter(i => !bankOf(i)).length;
+  const dates = [...new Set(all.map(i => i.pd))].sort().slice(0, 12);
+  return `<div class="panel">
+    <h2>이체 파일 (예약이체일 기준)</h2>
+    <p class="hint">고른 날짜가 예약이체일인 <b>미지급 매입 계산서</b>를 모아 국민은행 대량이체 파일을 만들어요. 만들면 그 건들은 ‘이체 예정’으로 바뀌어 중복 이체를 막아요.</p>
+    <div class="row"><input type="date" class="in" id="pfDate" value="${PF.date}">
+      ${dates.map(d => `<button class="btn sm ${d === PF.date ? 'primary' : ''}" data-pfd="${d}">${md(d)} · ${all.filter(i => i.pd === d).length}건</button>`).join('')}</div>
+    <div class="chips" style="margin-top:10px"><span class="chip"><b>${list.length}</b>건</span><span class="chip">합계 <b class="outC">${won(sum)}</b>원</span>${noAcct ? `<span class="chip"><span class="diff">계좌 없음 ${noAcct}건 (파일에서 빠져요)</span></span>` : ''}</div>
+    ${list.length ? `<div class="scroll"><table class="t ivt"><thead><tr><th>거래처</th><th>품목</th><th>계산서</th><th class="num">금액</th><th>계좌</th></tr></thead><tbody>
+      ${list.map(i => { const bk = bankOf(i); return `<tr><td class="vcell"><div class="vname">${esc(i.vendorName)}</div></td><td><div class="icell">${esc(i.item || '')}</div></td><td class="dcell">${md(i.date)}</td><td class="num"><b>${won(i.total)}</b></td><td class="hint">${bk ? esc(`${bankNameOf(bk.code)} ${bk.acct}`) : '<span class="diff">계좌 없음</span>'}</td></tr>`; }).join('')}
+    </tbody></table></div>
+    <div class="row" style="margin-top:12px"><button class="btn primary" id="pfMake">국민은행 대량이체 파일 받기</button><button class="btn" id="pfList">목록 엑셀 받기</button></div>` : '<p class="hint">이 날짜가 예약이체일인 미지급 계산서가 없어요.</p>'}
+  </div>`;
+}
+async function makePayFile() {
+  const list = PF.all.filter(i => i.pd === PF.date && bankOf(i) && num(i.total));
+  if (!list.length) return toast('계좌가 있는 미지급 건이 없어요');
+  if (!confirm(`${PF.date} 이체분 ${list.length}건, ${won(list.reduce((s, i) => s + num(i.total), 0))}원으로 대량이체 파일을 만들까요?\n만들면 이 건들은 ‘이체 예정’으로 바뀌어요.`)) return;
+  const ref = db.collection('batches').doc();
+  const items = list.map(i => { const bk = bankOf(i); return { invId: i.id, amt: num(i.total), code: bk.code, acct: bk.acct, holder: bk.holder, memo: i.memo || String(i.item || '').slice(0, 20) }; });
+  const yms = {}; list.forEach(i => yms[i.ym] = (yms[i.ym] || 0) + 1);
+  const b = { ym: Object.entries(yms).sort((a, c) => c[1] - a[1])[0][0], date: PF.date, items, total: items.reduce((s, x) => s + x.amt, 0), status: 'planned', createdAt: TS(), by: S.user.email };
+  await ref.set(b);
+  await commitBatches(list.map(i => x => x.update(db.collection('invoices').doc(i.id), { status: 'planned', batchId: ref.id })));
+  const wb = new ExcelJS.Workbook(); writeTransferSheet(wb, items, (MCFG || DEFAULT_MATCH).myDisplay);
+  await saveWb(wb, `미지급금_이체내역_업로드용_${PF.date.replace(/-/g, '')}.xlsx`);
+  IV.invs = null; await loadPayFileList(); refreshDue(); toast(`${list.length}건 이체 파일을 만들었어요`); renderExport();
+}
+async function payListExcel() {
+  const list = PF.all.filter(i => i.pd === PF.date), wb = new ExcelJS.Workbook(), ws = wb.addWorksheet(`${PF.date} 이체`);
+  const hr = ws.addRow(['예약이체일', '거래처', '사업자번호', '품목', '작성일자', '합계금액', '은행', '은행코드', '계좌번호', '예금주', '이체 메모', '계정명']);
+  hr.font = { bold: true }; hr.eachCell(c => c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFF00' } });
+  list.forEach(i => { const bk = bankOf(i); ws.addRow([i.pd, i.vendorName, fmtBiz(i.vendorBiz), i.item, i.date, num(i.total), bk ? bankNameOf(bk.code) : '', bk ? bk.code : '', bk ? bk.acct : '계좌 없음', bk ? bk.holder : '', i.memo || '', i.account || '']); });
+  const tr = ws.addRow(['합계', '', '', '', '', list.reduce((s, i) => s + num(i.total), 0)]); tr.font = { bold: true };
+  ws.getColumn(6).numFmt = '#,##0'; [12, 26, 14, 30, 12, 14, 10, 8, 20, 20, 20, 12].forEach((w, k) => ws.getColumn(k + 1).width = w);
+  await saveWb(wb, `이체목록_${PF.date.replace(/-/g, '')}.xlsx`);
+}
+
+/* ---------- 이벤트 (설정 · 업체별 이체 · 엑셀 다운로드) ---------- */
+document.addEventListener('click', e => {
+  const t = e.target; if (!t.closest) return;
+  // 자동이체 목록 (설정)
+  if (t.closest('#apSettings')) {
+    if (t.id === 'apAdd') return apDialog(null);
+    if (t.dataset.apedit) return apDialog(AP.list.find(x => x.id === t.dataset.apedit));
+    if (t.dataset.apdel) { const a = AP.list.find(x => x.id === t.dataset.apdel); if (!confirm(`${a.name} 자동이체를 목록에서 뺄까요?`)) return; return busy(async () => { await db.collection('autopays').doc(a.id).delete(); AP.list = AP.list.filter(x => x.id !== a.id); renderSettings(); }); }
+    if (t.id === 'apReco') return busy(async () => { await loadAutoTxns(); AP.recos = findRecos(); renderSettings(); });
+    if (t.id === 'recoClose') { AP.recos = null; return renderSettings(); }
+    if (t.id === 'recoAll') { document.querySelectorAll('[data-reco]').forEach(c => c.checked = t.checked); return; }
+    if (t.id === 'recoSave') {
+      const pick = [...document.querySelectorAll('[data-reco]')].filter(c => c.checked).map(c => AP.recos[+c.dataset.reco]);
+      if (!pick.length) return toast('등록할 곳을 골라 주세요');
+      return busy(async () => {
+        await commitBatches(pick.map(g => b => { const ref = db.collection('autopays').doc(); const data = { name: g.label, match: g.key, acct6: g.acct6, day: g.day || '', vendorId: '', account: '', memo: '', updatedAt: TS(), by: S.user.email }; AP.list.push({ id: ref.id, ...data }); b.set(ref, data); }));
+        AP.recos = null; toast(`${pick.length}곳을 자동이체로 등록했어요`); renderSettings();
+      });
+    }
   }
+  // 업체별 이체일 (설정)
+  if (t.closest('#pdSettings')) {
+    if (t.id === 'pdAdd') { $('#pdList').insertAdjacentHTML('beforeend', `<div class="row" style="margin-bottom:6px"><input class="in" data-pd="name" data-suggest="vendors" style="flex:1;max-width:340px" placeholder="거래처 이름"><span class="hint">매월</span><input class="in" data-pd="day" inputmode="numeric" style="width:64px;text-align:right" placeholder="25"><span class="hint">일</span><button class="btn ghost sm" data-pddel>삭제</button></div>`); $('#pdList').lastElementChild.querySelector('input').focus(); return; }
+    if (t.closest('[data-pddel]')) { t.closest('.row').remove(); return; }
+    if (t.id === 'pdSave') return busy(savePayDays);
+  }
+  // 자동이체 현황 (업체별 이체 탭)
   if (t.id === 'apDl') return busy(async () => {
     const { months, rows } = autoMonthsData(), wb = new ExcelJS.Workbook(), ws = wb.addWorksheet('자동이체 현황');
     const hr = ws.addRow(['업체', '은행 표시 이름', '출금일', ...months.flatMap(m => [m, '전월 대비'])]); hr.font = { bold: true };
@@ -2807,9 +2823,15 @@ apEl.addEventListener('click', e => {
     ws.columns.forEach((c, i) => { c.width = i < 2 ? 22 : 12; if (i >= 3) c.numFmt = '#,##0'; });
     await saveWb(wb, `자동이체_현황_${today().replace(/-/g, '')}.xlsx`);
   });
+  // 이체 파일 (엑셀 다운로드)
+  const pfd = t.closest('[data-pfd]'); if (pfd) { PF.date = pfd.dataset.pfd; return renderExport(); }
+  if (t.id === 'pfMake') return busy(makePayFile);
+  if (t.id === 'pfList') return busy(payListExcel);
 });
-apEl.addEventListener('change', e => {
-  if (e.target.id === 'apMonths') { AP.months = +e.target.value; busy(async () => { await db.collection('settings').doc('autopayView').set({ months: AP.months }); await loadAutoData(); renderAuto(); }); }
+document.addEventListener('change', e => {
+  const t = e.target;
+  if (t.id === 'apMonths') { AP.months = +t.value; busy(async () => { await db.collection('settings').doc('autopayView').set({ months: AP.months }); await loadAutoTxns(true); renderVpay(); }); }
+  if (t.id === 'pfDate' && t.value) { PF.date = t.value; renderExport(); }
 });
 </script>
 </body>
