@@ -1974,11 +1974,11 @@ async function loadInvData() {
   const [is, bs, lu] = await Promise.all([
     db.collection('invoices').where('ym', 'in', yms).get(),
     db.collection('batches').where('ym', 'in', yms).get(),
-    db.collection('invoiceUploads').orderBy('at', 'desc').limit(1).get()
+    db.collection('invoiceUploads').orderBy('at', 'desc').limit(20).get()
   ]);
   IV.invs = []; is.forEach(d => IV.invs.push({ id: d.id, ...d.data() }));
   IV.batches = []; bs.forEach(d => IV.batches.push({ id: d.id, ...d.data() }));
-  IV.lastUpload = null; lu.forEach(d => IV.lastUpload = { id: d.id, ...d.data() });
+  IV.uploads = []; lu.forEach(d => IV.uploads.push({ id: d.id, ...d.data() })); IV.lastUpload = IV.uploads[0] || null;
   const from = yms[0] + '-01';
   let to = nextMonthDay(nextMonthDay(IV.ym + '-01', 1), 31);
   IV.batches.forEach(b => { const e = addDays(b.date, 40); if (e > to) to = e; });
@@ -2080,6 +2080,7 @@ async function renderInv() {
   ${IV.status === 'void' ? `<p class="hint" style="margin:8px 4px">마이너스 계산서는 자동으로 발행 취소돼요. 노란 안내가 붙은 원래 계산서를 확인하고 <b>발행 취소</b>를 누르면 짝이 맞춰져요. (남은 확인 ${voidTodo}건)</p>` : ''}
   ${pagerHtml(list.length)}
   ${IV.kind === 'buy' ? batchesHtml() : ''}
+  ${uploadsHtml()}
   <datalist id="vendorNames">${VENDORS.map(v => `<option value="${esc(v.name)}">`).join('')}</datalist>`;
 }
 
@@ -2164,6 +2165,46 @@ function batchRegHtml() {
     ${IV.batchResult ? `<div style="margin-top:12px">${IV.batchResult.map(r => `<div class="${r.miss.length ? 'warn' : 'chip'}" style="margin:6px 0;display:block"><b>${esc(r.name)}</b> · ${r.rows}줄 중 <b>${r.linked}</b>건 계산서 연결 · 합계 ${won(r.total)}원${r.miss.length ? `<div style="margin-top:4px">연결 못 한 줄: ${r.miss.slice(0, 10).map(esc).join(', ')}${r.miss.length > 10 ? ' 외' : ''}</div>` : ''}</div>`).join('')}</div>` : ''}
     <p class="hint" style="margin-bottom:0">이체(예정)일 앞뒤 45일 안에서 같은 합계의 출금을 찾아요. 이미 지난 이체라면 실제 이체한 날짜를 골라 주세요.</p></div>`;
 }
+/* ---------- 업로드 기록 & 파일 단위 삭제 ---------- */
+function uploadsHtml() {
+  const list = IV.uploads || []; if (!list.length) return '';
+  return `<details class="panel" style="margin-top:18px"><summary><b>세금계산서 업로드 기록</b> <span class="hint">최근 ${list.length}개 · 잘못 올린 파일은 여기서 통째로 지울 수 있어요</span></summary>
+    <div class="scroll" style="margin-top:10px"><table class="t ivt"><thead><tr><th>올린 시각</th><th>파일</th><th class="num">전체</th><th class="num">새로 들어온 건</th><th>올린 사람</th><th></th></tr></thead><tbody>
+    ${list.map(u => `<tr><td class="dcell main">${u.at ? esc(u.at.toDate().toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })) : ''}</td><td>${esc(u.fileName || '')}</td><td class="num">${u.count || 0}</td><td class="num"><b>${u.newCount || 0}</b></td><td class="hint">${esc(initialOf(u.by))}</td>
+      <td><button class="btn ghost sm" data-updel="${u.id}">이 업로드 삭제</button></td></tr>`).join('')}
+    </tbody></table></div></details>`;
+}
+async function deleteInvUpload(id) {
+  const u = (IV.uploads || []).find(x => x.id === id); if (!u) return;
+  const invs = await busy(async () => {
+    const out = []; (await db.collection('invoices').where('uploadId', '==', id).get()).forEach(d => out.push({ id: d.id, ...d.data() }));
+    if (!out.length && u.at) {   // 예전 방식으로 올린 파일: 올린 시각 무렵에 같은 사람이 만든 계산서
+      const at = u.at.toDate(), from = new Date(at.getTime() - 15 * 60000), to = new Date(at.getTime() + 60000);
+      (await db.collection('invoices').where('createdAt', '>=', from).where('createdAt', '<=', to).get()).forEach(d => { const x = d.data(); if (x.by === u.by) out.push({ id: d.id, ...x }); });
+    }
+    return out;
+  });
+  if (!invs) return;
+  if (!invs.length) { if (confirm(`이 업로드로 새로 들어온 계산서가 없어요 (모두 이미 있던 건).\n업로드 기록만 지울까요?`)) await busy(async () => { await db.collection('invoiceUploads').doc(id).delete(); IV.invs = null; renderInv(); }); return; }
+  const sum = invs.reduce((s, i) => s + num(i.total), 0), paid = invs.filter(i => i.status === 'paid'), planned = invs.filter(i => i.status === 'planned');
+  let msg = `‘${u.fileName}’로 새로 들어온 계산서 ${invs.length}건 (합계 ${won(sum)}원)을 삭제할까요?\n\n이미 있던 계산서는 그대로 두고, 이 파일로 처음 들어온 것만 지워요.`;
+  if (paid.length) msg += `\n\n⚠ 이 중 ${paid.length}건은 이미 기지급으로 처리돼 있어요.`;
+  if (planned.length) msg += `\n⚠ ${planned.length}건은 대량이체 묶음에 들어 있어요. 묶음에서 빼고 합계를 다시 계산해요.`;
+  msg += '\n\n삭제하면 되돌릴 수 없어요.';
+  if (!confirm(msg)) return;
+  await busy(async () => {
+    const ids = new Set(invs.map(i => i.id)), bs = [];
+    (await db.collection('batches').get()).forEach(d => { const b = { id: d.id, ...d.data() }; if ((b.items || []).some(x => ids.has(x.invId))) bs.push(b); });
+    const ops = bs.map(b => {
+      const items = b.status === 'paid' ? b.items.map(x => ids.has(x.invId) ? { ...x, invId: null } : x) : b.items.filter(x => !ids.has(x.invId));
+      return x => x.update(db.collection('batches').doc(b.id), { items, total: items.reduce((s, y) => s + num(y.amt), 0) });
+    });
+    await commitBatches([...ops, ...invs.map(i => x => x.delete(db.collection('invoices').doc(i.id))), x => x.delete(db.collection('invoiceUploads').doc(id))]);
+    IV.invs = null; IV.sel.clear();
+    toast(`${invs.length}건을 삭제했어요`);
+  });
+  renderInv(); refreshDue();
+}
 function batchesHtml() {
   if (!IV.batches.length) return '';
   return `<div class="panel" style="margin-top:18px"><h2>대량이체 묶음</h2><div class="scroll"><table class="t">
@@ -2238,6 +2279,7 @@ ivEl.addEventListener('click', async e => {
       await ref.set(v); VENDORS.push({ id: ref.id, ...v }); refreshBizMap(); toast('거래처로 등록했어요. 거래처 화면에서 계좌를 넣어 주세요'); await doMatch(true); renderInv();
     });
   }
+  const ud = t.closest('[data-updel]'); if (ud) return deleteInvUpload(ud.dataset.updel);
   const bt = t.closest('[data-bt]');
   if (bt) {
     const b = IV.batches.find(x => x.id === bt.dataset.id);
