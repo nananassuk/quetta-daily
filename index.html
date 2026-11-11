@@ -614,7 +614,9 @@ const WD = '일월화수목금토';
 const dayLabel = s => { const d = parseD(s); return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} (${WD[d.getDay()]})`; };
 const today = () => ymd(new Date());
 const clone = o => JSON.parse(JSON.stringify(o));
-const ruleKey = t => encodeURIComponent(`${(t.memo1 || t.memo || '').trim()}|${(t.party || '').trim()}`).slice(0, 1400);
+const txDir = t => num(t.inAmt) > 0 ? 'in' : 'out';
+// 같은 적요·거래처라도 계좌나 입금/출금이 다르면 다른 규칙이에요
+const ruleKey = t => encodeURIComponent(`${t.acct6 || ''}|${txDir(t)}|${(t.memo1 || t.memo || '').trim()}|${(t.party || '').trim()}`).slice(0, 1400);
 function toast(msg) { const el = $('#toast'); el.textContent = msg; el.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove('show'), 2600); }
 async function busy(fn) { $('#busy').hidden = false; try { return await fn(); } catch (e) { console.error(e); toast('오류: ' + (e.message || e)); } finally { $('#busy').hidden = true; } }
 
@@ -1059,7 +1061,7 @@ async function saveLabel(id, raw) {
   if (S.applyRule) {
     const k = ruleKey(t);
     const pfxNow = PREFIX_OF.fn(t), pfx = !!pfxNow && val.startsWith(pfxNow);
-    const rule = { label: pfx ? val.slice(pfxNow.length) : val, pfx, memo1: (t.memo1 || t.memo || '').trim(), party: (t.party || '').trim(), updatedAt: TS(), by: S.user.email };
+    const rule = { label: pfx ? val.slice(pfxNow.length) : val, pfx, acct6: t.acct6, dir: txDir(t), memo1: (t.memo1 || t.memo || '').trim(), party: (t.party || '').trim(), updatedAt: TS(), by: S.user.email };
     await db.collection('rules').doc(k).set(rule); S.rules[k] = rule;
     const targets = [];
     for (const m of Object.values(S.months)) for (const x of m.txns.values()) if (x.id !== id && !x.label && ruleKey(x) === k) targets.push(x);
@@ -1490,9 +1492,11 @@ async function renderSettings() {
 
   <div class="panel">
     <h2>자동 적용 규칙 <span class="hint">${ruleRows.length}개</span></h2>
-    <p class="hint">일보에서 내역을 고치면 ‘적요1 + 의뢰인/수취인’ 조합으로 기억해 두었다가, 다음 업로드 때 같은 거래에 자동으로 넣어요.</p>
-    ${ruleRows.length ? `<div class="scroll"><table class="t"><thead><tr><th>적요1</th><th>의뢰인/수취인</th><th>일보 내역</th><th></th></tr></thead><tbody>
-      ${ruleRows.map(([k, r]) => `<tr><td>${esc(r.memo1)}</td><td>${esc(r.party)}</td><td><div class="row" style="flex-wrap:nowrap">${r.pfx ? '<span class="tag" title="계좌별 앞 글자가 자동으로 붙어요">사업장_</span>' : ''}<input class="in" style="width:100%" data-rule="${k}" value="${esc(r.label)}"></div></td><td><button class="btn ghost sm" data-rdel="${k}">삭제</button></td></tr>`).join('')}
+    <p class="hint">일보에서 내역을 고치면 <b>계좌 + 입금/출금 + 적요1 + 의뢰인/수취인</b> 조합으로 기억해 두었다가, 다음 업로드 때 <b>같은 계좌</b>의 같은 거래에만 자동으로 넣어요.</p>
+    ${ruleRows.some(([, r]) => !r.acct6) ? `<div class="warn">계좌 구분 없이 저장된 예전 규칙이 <b>${ruleRows.filter(([, r]) => !r.acct6).length}개</b> 있어요. 지금은 자동 적용을 멈춰 두었어요.
+      <div class="row" style="margin-top:8px"><button class="btn primary sm" id="ruleFix">계좌별로 정리하기</button><span class="hint">직접 고친 계좌를 찾아 그 계좌 규칙으로 바꾸고, 다른 계좌에 잘못 들어간 내역은 원래대로 되돌려요.</span></div></div>` : ''}
+    ${ruleRows.length ? `<div class="scroll"><table class="t"><thead><tr><th>계좌</th><th>적요1</th><th>의뢰인/수취인</th><th>일보 내역</th><th></th></tr></thead><tbody>
+      ${ruleRows.map(([k, r]) => `<tr><td style="white-space:nowrap">${r.acct6 ? `<span class="tag">${esc(accNameOf(r.acct6))}</span> <span class="hint">${r.dir === 'in' ? '입금' : '출금'}</span>` : '<span class="diff">계좌 미지정</span>'}</td><td>${esc(r.memo1)}</td><td>${esc(r.party)}</td><td><div class="row" style="flex-wrap:nowrap">${r.pfx ? '<span class="tag" title="계좌별 앞 글자가 자동으로 붙어요">사업장_</span>' : ''}<input class="in" style="width:100%" data-rule="${k}" value="${esc(r.label)}"></div></td><td><button class="btn ghost sm" data-rdel="${k}">삭제</button></td></tr>`).join('')}
       </tbody></table></div>` : '<p class="hint">아직 규칙이 없어요. 일보 화면에서 내역을 고치면 여기에 쌓여요.</p>'}
   </div>
 
@@ -1566,6 +1570,7 @@ async function renderSettings() {
     });
     toast('채웠어요. 확인 후 저장해 주세요');
   }
+  const rf = $('#ruleFix'); if (rf) rf.onclick = () => fixLegacyRules();
   el.querySelectorAll('[data-rule]').forEach(inp => inp.onchange = async () => {
     const k = inp.dataset.rule, label = inp.value.trim(); if (!label) return;
     await db.collection('rules').doc(k).update({ label, updatedAt: TS(), by: S.user.email }); S.rules[k].label = label; toast('규칙을 고쳤어요. 앞으로 올리는 거래부터 적용돼요');
@@ -1593,6 +1598,38 @@ async function renderSettings() {
     await Promise.all([db.collection('settings').doc('extra').set({ ...extra, updatedAt: TS(), by: S.user.email }), db.collection('settings').doc('borrow').set({ list: borrow, updatedAt: TS(), by: S.user.email })]);
     S.extra = extra; S.borrow = borrow; toast('저장했어요'); renderSettings();
   });
+}
+/* 예전 규칙(계좌 없음) → 직접 고친 계좌의 규칙으로 바꾸고, 다른 계좌에 잘못 들어간 내역 되돌리기 */
+async function fixLegacyRules() {
+  const legacy = Object.entries(S.rules).filter(([, r]) => !r.acct6);
+  const plan = await busy(async () => {
+    const out = { create: [], del: [], reset: [], left: [] };
+    for (const [k, r] of legacy) {
+      const txs = [];
+      (await db.collection('txns').where('memo1', '==', r.memo1).where('party', '==', r.party).get()).forEach(d => txs.push({ id: d.id, ...d.data() }));
+      if (!txs.length) (await db.collection('txns').where('memo', '==', r.memo1).where('party', '==', r.party).get()).forEach(d => txs.push({ id: d.id, ...d.data() }));
+      const src = new Map(); txs.filter(t => t.labelSrc === 'manual').forEach(t => src.set(`${t.acct6}|${txDir(t)}`, t));
+      if (!src.size) { out.left.push(r); continue; }
+      src.forEach(t => out.create.push({ key: ruleKey(t), rule: { ...r, acct6: t.acct6, dir: txDir(t), updatedAt: TS() } }));
+      txs.filter(t => t.labelSrc === 'rule' && !src.has(`${t.acct6}|${txDir(t)}`)).forEach(t => out.reset.push(t));
+      out.del.push(k);
+    }
+    return out;
+  });
+  if (!plan) return;
+  const msg = `예전 규칙 ${legacy.length}개를 정리할게요.\n\n· 계좌별 규칙으로 바꿈: ${plan.create.length}개\n· 다른 계좌에 잘못 들어간 내역 되돌림: ${plan.reset.length}건 (은행 내역 그대로로)\n· 직접 고친 기록을 못 찾은 규칙: ${plan.left.length}개 (자동 적용 안 함, 삭제하거나 다시 고쳐 주세요)\n\n진행할까요?`;
+  if (!confirm(msg)) return;
+  await busy(async () => {
+    await commitBatches([
+      ...plan.create.map(c => b => b.set(db.collection('rules').doc(c.key), c.rule)),
+      ...plan.del.map(k => b => b.delete(db.collection('rules').doc(k))),
+      ...plan.reset.map(t => b => b.update(db.collection('txns').doc(t.id), { label: null, labelSrc: null }))
+    ]);
+    plan.del.forEach(k => delete S.rules[k]); plan.create.forEach(c => S.rules[c.key] = c.rule);
+    S.months = {}; S.tx.list = null;
+    toast(`정리했어요 · 규칙 ${plan.create.length}개, 되돌린 내역 ${plan.reset.length}건`);
+  });
+  renderSettings();
 }
 function accRowHtml(a, i) {
   const f = (k, w) => `<input class="in" data-a="${k}" style="width:${w}px" value="${esc(a[k] || '')}">`;
