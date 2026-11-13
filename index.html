@@ -196,6 +196,13 @@ tr.voided td:last-child,tr.voided td:nth-last-child(2){text-decoration:none;opac
 .chkon{border:1px solid #BFE5E0;background:var(--teal-soft);color:var(--teal-deep);font-weight:700;border-radius:6px;padding:2px 8px;font-size:12px;cursor:pointer;white-space:nowrap}
 .chkoff{border:1px dashed var(--line);background:#fff;color:var(--muted);border-radius:6px;padding:2px 8px;font-size:12px;cursor:pointer;white-space:nowrap}
 .chkoff:hover{border-color:var(--teal);color:var(--teal-deep)}
+.newn{color:#fff;background:var(--teal);border-radius:3px;font-size:9px;font-weight:800;padding:0 3px;margin-left:3px;vertical-align:4px}
+.mcell{max-width:220px;white-space:nowrap}
+.mtxt{display:inline-block;max-width:150px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+.sugi{font-size:16px;cursor:help;vertical-align:middle}
+.sugbtn{padding:2px 9px!important;font-size:12px!important;vertical-align:middle}
+.sugx{border:0;background:none;color:var(--muted);cursor:pointer;font-size:12px;padding:2px 4px;vertical-align:middle}
+.sugx:hover{color:var(--ink)}
 .presets{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
 .presets button{border:1px solid var(--teal);background:#fff;color:var(--teal-deep);border-radius:99px;padding:5px 12px;cursor:pointer}
 .presets button:hover{background:var(--teal-soft)}
@@ -2266,7 +2273,7 @@ async function renderInv() {
   </div>
   ${IV.sel.size ? `<div class="toolbar"><span>${IV.sel.size}건 · ${won(selSum)}원 선택</span><span class="spacer"></span><button class="btn sm" id="ivBulkPaid">선택 건 ${IV.kind === 'sell' ? '입금' : '지급'} 처리</button>${IV.kind === 'buy' ? '<button class="btn sm" id="ivMakeBatch">대량이체 파일 만들기</button>' : ''}<button class="btn sm" id="ivSelClear">선택 해제</button></div>` : ''}
   <div class="panel" style="padding:0"><div class="scroll"><table class="t ivt">
-    <thead><tr><th><input type="checkbox" id="ivSelAll" aria-label="이 페이지 처리 대상 모두 선택"></th><th>작성</th><th>발급</th><th>전송</th>${IV.kind === 'buy' ? '<th>예약이체</th>' : ''}<th>거래처</th><th>품목</th><th class="num">합계금액</th><th>품의서</th><th>상태</th><th>매칭 내역</th><th>계정명</th>${IV.kind === 'buy' ? '<th>이체 메모</th>' : ''}<th></th></tr></thead>
+    <thead><tr><th><input type="checkbox" id="ivSelAll" aria-label="이 페이지 처리 대상 모두 선택"></th><th>작성</th><th>발급</th><th>전송</th><th>상태</th><th>거래처</th><th>품목</th><th class="num">합계금액</th><th>품의서</th><th>처리 내역</th><th></th><th>계정명</th>${IV.kind === 'buy' ? '<th>이체 메모</th>' : ''}<th></th>${IV.kind === 'buy' ? '<th>예약이체</th>' : ''}</tr></thead>
     <tbody>${list.length ? pageSlice(list).map(invRowHtml).join('') : `<tr><td colspan="15" class="empty">${all.length ? '조건에 맞는 계산서가 없어요.' : '이 달 세금계산서가 아직 없어요. 위에서 세금계산서 엑셀을 업로드하세요.'}</td></tr>`}</tbody>
   </table></div></div>
   ${IV.status === 'void' ? `<p class="hint" style="margin:8px 4px">마이너스 계산서는 자동으로 발행 취소돼요. 노란 안내가 붙은 원래 계산서를 확인하고 <b>발행 취소</b>를 누르면 짝이 맞춰져요. (남은 확인 ${voidTodo}건)</p>` : ''}
@@ -2289,28 +2296,37 @@ function invRowHtml(i) {
   const L = i.kind === 'sell' ? STATUS_LABEL_SELL : STATUS_LABEL;
   const v = vendorOf(i), bk = i.kind === 'buy' ? bankOf(i) : null;
   const cls = { paid: 'okC', review: 'diff', unpaid: 'outC', planned: 'hint', excluded: 'hint' }[i.status] || '';
+  const open = (i.status === 'unpaid' || i.status === 'review' || i.status === 'planned') && !i.voided;
+  // 기지급(입금) 처리 버튼 — 계정명 앞
+  const payBtn = open ? `<button class="btn sm" data-iv="manualpaid" data-id="${esc(i.id)}">${i.kind === 'sell' ? '입금 처리' : '기지급 처리'}</button>` : '';
+  // 그 밖의 버튼 — 맨 뒤
   let act = '';
-  if (i.status === 'unpaid' || i.status === 'review') act = `<button class="btn ghost sm" data-iv="manualpaid" data-id="${esc(i.id)}">${i.kind === 'sell' ? '입금 체크' : '기지급 체크'}</button> <button class="btn ghost sm" data-iv="exclude" data-id="${esc(i.id)}">${L.excluded}</button>`;
+  if (i.status === 'unpaid' || i.status === 'review') act = `<button class="btn ghost sm" data-iv="exclude" data-id="${esc(i.id)}">${L.excluded}</button>`;
   else if (i.voided) act = `<button class="btn ghost sm" data-iv="undo" data-id="${esc(i.id)}">취소 해제</button>`;
   else if (i.status === 'paid' || i.status === 'excluded') act = `<button class="btn ghost sm" data-iv="undo" data-id="${esc(i.id)}">되돌리기</button>`;
-  if ((i.status === 'unpaid' || i.status === 'review' || i.status === 'planned') && !i.voided) act += ` <button class="btn ghost sm" data-iv="void" data-id="${esc(i.id)}" title="잘못 발행된 계산서 (이체하지 않음)">발행 취소</button>`;
+  if (open) act += ` <button class="btn ghost sm" data-iv="void" data-id="${esc(i.id)}" title="잘못 발행된 계산서 (이체하지 않음)">발행 취소</button>`;
   const voidHint = IV.voidCands && IV.voidCands.has(i.id) ? '<div class="diff" style="font-size:11.5px">같은 금액 마이너스 계산서가 있어요 · 발행 취소 건일 수 있어요</div>' : '';
-  const canSel = (i.status === 'unpaid' || i.status === 'planned' || i.status === 'review') && !i.voided;
+  const canSel = open;
+  const sg = i.suggest && open ? i.suggest : null;
+  const sugTip = sg ? `맞는 것 같아요: ${sg.text}${sg.type === 'amount' ? ' (금액만 같음)' : ''}` : '';
+  const matchTxt = i.status === 'excluded' ? (i.manualNote || '') : (i.matchText || '');
+  const isNew = IV.lastUpload && i.uploadId === IV.lastUpload.id;
   return `<tr class="${i.voided ? 'voided' : ''}">
     <td>${canSel ? `<input type="checkbox" data-iv="sel" data-id="${esc(i.id)}" ${IV.sel.has(i.id) ? 'checked' : ''} aria-label="선택">` : ''}</td>
-    <td class="dcell main" title="${esc(i.date || '')}">${md(i.date)}${IV.lastUpload && i.uploadId === IV.lastUpload.id ? ' <span class="newb">NEW</span>' : ''}</td>
+    <td class="dcell main" title="${esc(i.date || '')}${isNew ? ' · 이번에 새로 올라온 건' : ''}">${md(i.date)}${isNew ? '<sup class="newn">N</sup>' : ''}</td>
     <td class="dcell" title="${esc(i.issueDate || '')}">${md(i.issueDate)}</td><td class="dcell" title="${esc(i.sendDate || '')}">${md(i.sendDate)}</td>
-    ${i.kind === 'buy' ? `<td>${i.status === 'paid' || i.status === 'excluded' ? `<span class="dcell">${md(payDateOf(i))}</span>` : `<input type="date" class="in pdin ${i.payDate ? 'pdset' : ''}" data-iv="paydate" data-id="${esc(i.id)}" value="${payDateOf(i)}" title="${i.payDate ? '직접 바꾼 날짜예요. 비우면 원래 날짜로 돌아가요' : (vendorOf(i) && vendorOf(i).payDay ? `업체 이체일: 매월 ${vendorOf(i).payDay}일` : '기본 이체일')}">`}</td>` : ''}
+    <td class="${cls}" style="white-space:nowrap"><b>${i.voided ? '발행 취소' : (L[i.status] || '-')}</b></td>
     <td class="vcell"><div class="vname" title="${esc(i.vendorName)}">${esc(i.vendorName)}${i.type === '수기' ? ' <span class="tag cash">수기</span>' : ''}</div>
       <div class="vsub">${i.kind === 'buy' ? (bk ? esc(`${bankNameOf(bk.code)} ${bk.acct}`) : '<span class="warnt">계좌 없음</span>') : esc(i.ourName || '')}${!v && i.type !== '수기' ? ' · <span class="warnt">미연결</span>' : ''}</div></td>
     <td><div class="icell" title="${esc(i.item || '')}">${esc(i.item || '')}</div></td>
     <td class="num">${i.type === '수기' && i.status === 'unpaid' ? `<input class="in num" style="width:110px" data-iv="total" data-id="${esc(i.id)}" value="${wonOrBlank(i.total)}" placeholder="금액 입력">` : `<b>${won(i.total)}</b>`}</td>
-    <td style="white-space:nowrap">${i.approval ? `<label class="okC" title="${esc(i.approval.by)}"><input type="checkbox" data-iv="approval" data-id="${esc(i.id)}" checked> ${esc(initialOf(i.approval.by))} · ${esc(shortTime(i.approval.at))}</label>` : `<input type="checkbox" data-iv="approval" data-id="${esc(i.id)}" aria-label="품의서 확인">`}</td>
-    <td class="${cls}" style="white-space:nowrap"><b>${i.voided ? '발행 취소' : (L[i.status] || '-')}</b>${i.lock && i.status !== 'review' && !i.voided ? ' <span class="hint">(직접)</span>' : ''}</td>
-    <td class="hint" style="max-width:280px">${voidHint}${esc(i.status === 'excluded' ? (i.manualNote || '') : (i.matchText || ''))}${i.suggest && (i.status === 'unpaid' || i.status === 'planned') && !i.voided ? `<div class="sugbox">💡 맞는 것 같아요: ${esc(i.suggest.text)}${i.suggest.type === 'amount' ? ' <span class="diff">(금액만 같음)</span>' : ''}<div class="row" style="gap:4px;margin-top:4px"><button class="btn sm primary" data-iv="sugok" data-id="${esc(i.id)}">이 출금으로 처리</button><button class="btn sm ghost" data-iv="sugno" data-id="${esc(i.id)}">아니에요</button></div></div>` : ''}${i.matchType === 'manual' ? (i.bankMatch ? ' <span class="okC"><b>· 은행 내역 일치 ✓</b></span>' : ' <span class="diff">· 은행 내역 없음</span>') : ''}</td>
+    <td style="white-space:nowrap">${i.approval ? `<label class="chkon" title="${esc(i.approval.by)} · ${esc(new Date(i.approval.at).toLocaleString('ko-KR'))}"><input type="checkbox" data-iv="approval" data-id="${esc(i.id)}" checked hidden>✓ ${esc(initialOf(i.approval.by))}</label>` : `<input type="checkbox" data-iv="approval" data-id="${esc(i.id)}" aria-label="품의서 확인">`}</td>
+    <td class="hint mcell">${voidHint}${matchTxt ? `<span class="mtxt" title="${esc(matchTxt)}">${i.status === 'paid' ? '✓ ' + esc(md(i.matchDate || '')) + ' ' : ''}${i.status === 'paid' ? `<span class="hint">${esc(i.payWay || (i.matchType === 'batch' ? '대량이체' : ''))}</span>` : esc(matchTxt)}</span>` : ''}${i.matchType === 'manual' || i.matchType === 'confirmed' ? (i.bankMatch ? ' <span class="okC" title="은행 내역과 일치">✓통장</span>' : ' <span class="diff" title="같은 날 같은 금액 은행 내역 없음">통장?</span>') : ''}${sg ? `<span class="sugi" title="${esc(sugTip)}">💡</span> <button class="btn sm primary sugbtn" data-iv="sugok" data-id="${esc(i.id)}" title="${esc(sugTip)} → 이 날짜로 처리">처리</button><button class="sugx" data-iv="sugno" data-id="${esc(i.id)}" title="이 추천은 아니에요">✕</button>` : ''}</td>
+    <td style="white-space:nowrap">${payBtn}</td>
     <td><input class="in" style="width:96px" data-iv="account" data-id="${esc(i.id)}" value="${esc(i.account || '')}"></td>
     ${i.kind === 'buy' ? `<td><input class="in" style="width:140px" data-iv="memo" data-id="${esc(i.id)}" value="${esc(i.memo || '')}" placeholder="${esc(String(i.item || '').slice(0, 20))}"></td>` : ''}
-    <td style="white-space:nowrap">${act}</td></tr>`;
+    <td style="white-space:nowrap">${act}</td>
+    ${i.kind === 'buy' ? `<td>${i.status === 'paid' || i.status === 'excluded' ? `<span class="dcell">${md(payDateOf(i))}</span>` : `<input type="date" class="in pdin ${i.payDate ? 'pdset' : ''}" data-iv="paydate" data-id="${esc(i.id)}" value="${payDateOf(i)}" title="${i.payDate ? '직접 바꾼 날짜예요. 비우면 원래 날짜로 돌아가요' : (vendorOf(i) && vendorOf(i).payDay ? `업체 이체일: 매월 ${vendorOf(i).payDay}일` : '예약이체일 없음')}">`}</td>` : ''}</tr>`;
 }
 
 function unlinkedHtml(list) {
