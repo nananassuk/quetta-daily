@@ -192,7 +192,7 @@ tr.voided td:last-child,tr.voided td:nth-last-child(2){text-decoration:none;opac
 .txt td{padding:7px 9px;font-size:13px}
 .txt tr.sel td{background:var(--teal-soft)}
 .txt tr.dayrow td{background:#F3F7F6;border-top:2px solid var(--line);padding:8px 10px;font-size:13px}
-.thsel{padding:3px 4px;font-size:12px;font-weight:600;color:var(--muted);border-color:transparent;background:transparent;cursor:pointer}
+.thsel{width:auto;max-width:76px;padding:3px 2px;font-size:12px;font-weight:600;color:var(--muted);border-color:transparent;background:transparent;cursor:pointer}
 .chkon{border:1px solid #BFE5E0;background:var(--teal-soft);color:var(--teal-deep);font-weight:700;border-radius:6px;padding:2px 8px;font-size:12px;cursor:pointer;white-space:nowrap}
 .chkoff{border:1px dashed var(--line);background:#fff;color:var(--muted);border-radius:6px;padding:2px 8px;font-size:12px;cursor:pointer;white-space:nowrap}
 .chkoff:hover{border-color:var(--teal);color:var(--teal-deep)}
@@ -1371,7 +1371,7 @@ async function renderTxns() {
   <div id="txBar"></div>
   <div class="panel" style="padding:0"><div class="scroll"><table class="t ivt txt">
     <thead><tr><th><input type="checkbox" id="txAll" aria-label="보이는 거래 모두 선택"></th><th>일자</th><th>시간</th>${S.tx.tab === 'all' ? '<th>계좌</th>' : ''}<th class="num">입금</th><th class="num">출금</th><th class="num">잔액</th><th>적요1</th><th>의뢰인/수취인</th><th>일보 내역</th>
-      <th>${fsel('day', '자금일보')}</th><th>${fsel('card', '예입카드')}</th><th>${fsel('voucher', '전표입력')}</th></tr></thead>
+      <th title="자금일보 확인">${fsel('day', '자금')}</th><th title="예입카드 입력">${fsel('card', '예입')}</th><th title="전표입력">${fsel('voucher', '전표')}</th></tr></thead>
     <tbody id="txBody"></tbody></table></div><div id="txMore"></div></div>`;
   drawTxBody(am);
 }
@@ -2947,7 +2947,7 @@ async function renderVendors() {
       <label class="btn">엑셀로 일괄 등록<input type="file" id="vdFile" accept=".xlsx,.xls" hidden></label>
       <button class="btn" id="vdDl">목록 엑셀 받기</button>
     </div>
-    ${VD.pending ? `<div class="warn">${esc(VD.pending.fileName)}: 새 거래처 <b>${VD.pending.creates.length}</b>곳, 기존 거래처에 이름 추가 <b>${VD.pending.merges}</b>건, 같은 계좌로 합친 중복 <b>${VD.pending.dupes}</b>건.
+    ${VD.pending ? `<div class="warn">${esc(VD.pending.fileName)}: 새 거래처 <b>${VD.pending.creates.length}</b>곳, 기존 거래처에 이름 추가 <b>${VD.pending.merges}</b>건, 같은 계좌로 합친 중복 <b>${VD.pending.dupes}</b>건, 사업자번호 인식 <b>${VD.pending.bizFound}</b>곳${VD.pending.bizCol < 0 ? ' <span class="diff">(사업자번호 열을 찾지 못했어요)</span>' : ''}.
       <div class="row" style="margin-top:8px"><button class="btn primary sm" id="vdSave">등록하기</button><button class="btn ghost sm" id="vdCancel">취소</button></div></div>` : ''}
   </div>
   <div class="panel" style="padding:0"><div class="scroll"><table class="t ivt">
@@ -3049,34 +3049,47 @@ async function parseVendorFile(file) {
   let rows = null, H = null, hi = -1;
   for (const sn of wb.SheetNames) {
     const r = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: false, defval: '' });
-    const i = r.findIndex(x => x.map(y => String(y).trim()).includes('거래처명') && (x.map(y => String(y).trim()).includes('계좌번호') || x.map(y => String(y).trim()).includes('사업자번호')));
+    const i = r.findIndex(x => x.map(y => String(y).trim()).includes('거래처명') && (x.map(y => String(y).trim()).includes('계좌번호') || x.some(y => String(y).includes('사업자'))));
     if (i >= 0) { rows = r; hi = i; H = r[i].map(y => String(y).trim()); break; }
   }
   if (!rows) throw new Error('거래처명과 계좌번호(또는 사업자번호) 머리글이 있는 시트를 찾지 못했어요');
   const c = n => H.indexOf(n), extraCodes = {};
+  // 사업자번호 열: 제목에 '사업자'가 있으면 그 열, 없으면 000-00-00000 모양 값이 많은 열
+  let bizCol = H.findIndex(x => x.includes('사업자'));
+  if (bizCol < 0) {
+    let best = -1, bestN = 0;
+    H.forEach((_, j) => { if (j === c('계좌번호')) return; const n = rows.slice(hi + 1).filter(r => /^\d{3}-?\d{2}-?\d{5}$/.test(String(r[j] || '').trim())).length; if (n > bestN) { bestN = n; best = j; } });
+    if (bestN >= 3) bizCol = best;
+  }
   const ci = c('대표코드'), ni = c('참가기관명');
   if (ci >= 0) rows.slice(hi + 1).forEach(r => { const nm = String(r[ci - 1] || '').trim(); if (nm && r[ci]) extraCodes[nm] = digits(r[ci]).padStart(3, '0'); });
   const byAcct = new Map(VENDORS.filter(v => digits(v.acct)).map(v => [digits(v.acct), v]));
   VENDORS.forEach(v => (v.bizNos || []).forEach(b => { if (!digits(v.acct) && bizKey(b)) byAcct.set('biz:' + bizKey(b), v); }));
-  const creates = new Map(); let merges = 0, dupes = 0; const mergeOps = [];
+  const creates = new Map(); let merges = 0, dupes = 0, bizAdded = 0; const mergeOps = [];
   for (const r of rows.slice(hi + 1)) {
     const name = String(r[c('거래처명')] || '').trim(), acct = c('계좌번호') >= 0 ? String(r[c('계좌번호')] || '').trim() : '';
-    const biz = c('사업자번호') >= 0 ? bizKey(r[c('사업자번호')]) : '';
+    const biz = bizCol >= 0 ? bizKey(r[bizCol]) : '';
     if (!name || (!digits(acct) && biz.length !== 10)) continue;
     const bank = String(r[c('은행')] || '').trim(), code = bankCodeOf(bank, r[c('은행코드')]) || extraCodes[bank] || '';
     const holder = c('예금주') >= 0 ? String(r[c('예금주')] || '').trim() : '';
     const key = digits(acct) || 'biz:' + biz, ex = byAcct.get(key);
-    if (ex) { if (normName(ex.name) !== normName(name) && !(ex.aliases || []).some(a => normName(a) === normName(name))) { ex.aliases = [...(ex.aliases || []), name]; mergeOps.push(ex); merges++; } continue; }
-    if (creates.has(key)) { const x = creates.get(key); if (normName(x.name) !== normName(name) && !x.aliases.includes(name)) x.aliases.push(name); dupes++; continue; }
+    if (ex) {
+      let changed = false;
+      if (normName(ex.name) !== normName(name) && !(ex.aliases || []).some(a => normName(a) === normName(name))) { ex.aliases = [...(ex.aliases || []), name]; changed = true; merges++; }
+      if (biz.length === 10 && !(ex.bizNos || []).some(b => bizKey(b) === biz)) { ex.bizNos = [...(ex.bizNos || []), fmtBiz(biz)]; changed = true; bizAdded++; }
+      if (holder && !ex.holder) { ex.holder = holder; changed = true; }
+      if (changed) mergeOps.push(ex); continue;
+    }
+    if (creates.has(key)) { const x = creates.get(key); if (normName(x.name) !== normName(name) && !x.aliases.includes(name)) x.aliases.push(name); if (biz.length === 10 && !x.bizNos.some(b => bizKey(b) === biz)) x.bizNos.push(fmtBiz(biz)); dupes++; continue; }
     creates.set(key, { name, aliases: [], bizNos: biz.length === 10 ? [fmtBiz(biz)] : [], bank, bankCode: code, acct, holder, outNames: [], inNames: [], account: '', autoPay: !digits(acct) });
   }
-  VD.pending = { fileName: file.name, creates: [...creates.values()], merges, dupes, mergeOps: [...new Set(mergeOps)] };
+  VD.pending = { fileName: file.name, creates: [...creates.values()], merges, dupes, bizAdded, bizCol, bizFound: [...creates.values()].filter(v => v.bizNos.length).length + bizAdded, mergeOps: [...new Set(mergeOps)] };
   renderVendors();
 }
 async function saveVendorImport() {
   const p = VD.pending;
   const ops2 = p.creates.map(v => { const ref = db.collection('vendors').doc(); return b => b.set(ref, { ...v, createdAt: TS() }); });
-  await commitBatches([...ops2, ...p.mergeOps.map(v => b => b.update(db.collection('vendors').doc(v.id), { aliases: v.aliases }))]);
+  await commitBatches([...ops2, ...p.mergeOps.map(v => b => b.update(db.collection('vendors').doc(v.id), { aliases: v.aliases || [], bizNos: v.bizNos || [], holder: v.holder || '' }))]);
   VD.pending = null; VENDORS = null; refreshBizMap();
   toast(`${p.creates.length}곳을 등록했어요`); renderVendors();
 }
