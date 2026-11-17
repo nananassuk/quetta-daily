@@ -1623,12 +1623,19 @@ async function linkBulk(f, tx) {
 
 /* ---------- 통합매출장 업로드 → 매출 세부 내역 ---------- */
 const SALES_SITE = name => { const n = String(name).replace(/\s/g, ''); return n.includes('퀀텀1') ? 'q1' : n.includes('퀀텀2') ? 'q2' : n.includes('학원') ? 'acad' : ''; };
+async function loadSalesMeta() {
+  const [m, s] = await Promise.all([db.collection('settings').doc('salesMeta').get(), db.collection('sales').get()]);
+  S.salesMeta = m.exists ? m.data() : {};
+  S.salesLast = {}; s.forEach(d => SALES_ROWS.forEach(([k]) => { if (d.data()[k] && d.id > (S.salesLast[k] || '')) S.salesLast[k] = d.id; }));
+}
 function renderSalesUpload() {
+  if (!S.salesMeta) { S.salesMeta = {}; loadSalesMeta().then(renderSalesUpload).catch(e => console.error(e)); }
   let box = $('#salesUp');
   if (!box) { box = document.createElement('div'); box.id = 'salesUp'; const first = $('#v-upload').firstElementChild; first ? first.after(box) : $('#v-upload').append(box); }
   const p = S.salesPending, siteName = k => (SALES_ROWS.find(x => x[0] === k) || [, '?'])[1];
   box.innerHTML = `<div class="panel">
     <h2>통합매출장 업로드 <span class="hint">자금일보 매출 세부 내역에 자동으로 들어가요</span></h2>
+    <div class="chips">${SALES_ROWS.map(([k, l]) => { const mt = (S.salesMeta || {})[k], ld = (S.salesLast || {})[k]; return `<span class="chip">${l} 마지막 거래 <b>${mt ? esc(mt.lastAt.slice(0, 16)) : ld ? esc(ld) : '-'}</b>${mt ? '' : ld ? ' <span class="hint">(날짜만)</span>' : ''}</span>`; }).join('')}</div>
     <p class="hint">파일 이름에 <b>학원 / 퀀텀1 / 퀀텀2</b>가 들어 있으면 사업장을 알아서 구분해요. 날짜별로 <b>현금 = 현금, 예금 = 가상계좌 + 은행, 카드 = 카드</b>로 합쳐요 (취소 포함). 같은 날짜를 다시 올리면 새 값으로 바뀌어요.</p>
     <label class="drop" id="sdrop"><input type="file" id="sfile" accept=".xlsx,.xls" multiple hidden>
       <b>통합매출장 파일을 끌어다 놓거나 클릭해서 선택</b><span class="hint">학원·퀀텀1·퀀텀2 한 번에 선택 가능</span></label>
@@ -1647,7 +1654,7 @@ function renderSalesUpload() {
 async function parseSalesFiles(files) {
   const out = [];
   for (const file of files) {
-    const f = { name: file.name, site: SALES_SITE(file.name), byDate: {}, cash: 0, dep: 0, card: 0, days: 0 };
+    const f = { name: file.name, site: SALES_SITE(file.name), byDate: {}, cash: 0, dep: 0, card: 0, days: 0, lastAt: '' };
     try {
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
@@ -1655,7 +1662,9 @@ async function parseSalesFiles(files) {
       if (hi < 0) throw new Error('결제일자·가상계좌 머리글이 없어요');
       const H = rows[hi].map(x => String(x).trim()), c = n => H.indexOf(n);
       rows.slice(hi + 1).forEach(r => {
-        const d = normDate(r[c('결제일자')]); if (!d) return;   // 소계 줄은 날짜가 없어서 빠져요
+        const raw = r[c('결제일자')], d = normDate(raw); if (!d) return;   // 소계 줄은 날짜가 없어서 빠져요
+        const at = typeof raw === 'number' ? XLSX.SSF.format('yyyy-mm-dd hh:mm:ss', raw) : String(raw).trim();
+        if (at > f.lastAt) f.lastAt = at;
         const x = f.byDate[d] = f.byDate[d] || { cash: 0, dep: 0, card: 0 };
         x.cash += num(r[c('현금')]); x.dep += num(r[c('가상계좌')]) + num(r[c('은행')]); x.card += num(r[c('카드')]);
       });
@@ -1672,6 +1681,10 @@ async function saveSales() {
     ops.push(b => b.set(db.collection('sales').doc(d), { [f.site]: { cash: Math.round(x.cash), dep: Math.round(x.dep), card: Math.round(x.card), file: f.name, at: Date.now(), by: S.user.email } }, { merge: true }));
   }));
   await commitBatches(ops);
+  const meta = { ...(S.salesMeta || {}) }, upd = {};
+  S.salesPending.files.filter(f => f.site && f.days && f.lastAt).forEach(f => { if (!meta[f.site] || f.lastAt > (meta[f.site].lastAt || '')) { meta[f.site] = upd[f.site] = { lastAt: f.lastAt, file: f.name, at: Date.now(), by: S.user.email }; } });
+  if (Object.keys(upd).length) await db.collection('settings').doc('salesMeta').set(upd, { merge: true });
+  S.salesMeta = meta;
   S.salesPending = null; S.months = {};
   toast(`매출 ${ops.length}일치를 저장했어요 · 자금일보에 바로 반영돼요`); renderSalesUpload();
 }
