@@ -218,7 +218,7 @@ tr.voided td:last-child,tr.voided td:nth-last-child(2){text-decoration:none;opac
 .pendtag{background:var(--gold);color:#fff;font-size:11px;font-weight:800;border-radius:4px;padding:0 6px}
 .ivc{table-layout:fixed;width:100%}
 .ivc th,.ivc td{padding:7px 6px;vertical-align:middle}
-.ivc .c-sel{width:28px}.ivc .c-date{width:64px}.ivc .c-amt{width:104px}.ivc .c-chk{width:62px;text-align:center}.ivc .c-fit{width:104px}
+.ivc .c-sel{width:28px}.ivc .c-date{width:66px}.ivc .c-amt{width:118px}.ivc .c-chk{width:72px;text-align:center}.ivc .c-fit{width:128px}
 .ivc .vcell{min-width:0;max-width:none}.ivc .icell{max-width:none}
 .ivc th{font-size:12px;white-space:nowrap}
 .ivc .sub{font-size:11px;color:var(--muted);line-height:1.3}
@@ -231,6 +231,10 @@ input.fit:focus{position:relative;z-index:5;width:240px;font-size:13px!important
 .sugi:hover{transform:scale(1.2)}
 .acchip{border:1px solid var(--line);cursor:pointer;background:#fff}
 .acchip.on{background:var(--teal);color:#fff;border-color:var(--teal)}
+.tscroll{max-height:900px;overflow:auto;position:relative}   /* 머리글 고정, 20건 정도 보이는 높이 */
+.tscroll table{border-collapse:separate;border-spacing:0}
+.tscroll thead th{position:sticky;top:0;z-index:3;background:#F3F7F6;box-shadow:inset 0 -1px 0 var(--line)}
+.tscroll .txt tr.dayrow td{position:sticky;top:34px;z-index:2}
 .presets{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
 .presets button{border:1px solid var(--teal);background:#fff;color:var(--teal-deep);border-radius:99px;padding:5px 12px;cursor:pointer}
 .presets button:hover{background:var(--teal-soft)}
@@ -1061,8 +1065,14 @@ function peopleHtml(f, op) {
   </div>
   <div class="people" style="margin-top:-10px">
     <b>오늘 매출</b>
-    ${SALES_ROWS.map(([k, l]) => { const s = f.sales[k] || {}, up = f.salesUp && f.salesUp[k], c = (op.salesCum || {})[k] || {}; const cum = num(c.cash) + num(c.dep) + num(c.card) + num(s.cash) + num(s.dep) + num(s.card);
-      return `<span>${l} ${up ? `<b>${won(num(s.cash) + num(s.dep) + num(s.card))}</b> <span class="hint">(현금 ${won(s.cash)} · 예금 ${won(s.dep)} · 카드 ${won(s.card)})</span>` : '<span class="hint">통합매출장 없음</span>'} <span class="hint">· ${+S.date.slice(5, 7)}월 누계</span> <b>${won(cum)}</b></span>`; }).join('<span class="hint">|</span>')}
+    ${SALES_ROWS.map(([k, l]) => { const s = f.sales[k] || {}, up = f.salesUp && f.salesUp[k];
+      return `<span>${l} ${up ? `<b>${won(num(s.cash) + num(s.dep) + num(s.card))}</b> <span class="hint">(현금 ${won(s.cash)} · 예금 ${won(s.dep)} · 카드 ${won(s.card)})</span>` : '<span class="hint">통합매출장 없음</span>'}</span>`; }).join('<span class="hint">|</span>')}
+  </div>
+  <div class="people" style="margin-top:-10px">
+    <b>${+S.date.slice(5, 7)}월 매출</b>
+    ${SALES_ROWS.map(([k, l]) => { const s = f.sales[k] || {}, c = (op.salesCum || {})[k] || {};
+      const cash = num(c.cash) + num(s.cash), dep = num(c.dep) + num(s.dep), card = num(c.card) + num(s.card);
+      return `<span>${l} <b>${won(cash + dep + card)}</b> <span class="hint">(현금 ${won(cash)} · 예금 ${won(dep)} · 카드 ${won(card)})</span></span>`; }).join('<span class="hint">|</span>')}
   </div>`;
 }
 /* 예전에 쓴 내역 이름 (자동 추천) */
@@ -1511,10 +1521,10 @@ async function renderTxns() {
     <p class="hint" style="margin:8px 0 0">자금일보 체크는 그날 ‘자금일보 확인’을 누르면 자동으로 돼요. 예입카드는 매출예입 중 카드사 입금(PG 제외), 전표입력은 매출예입·환불 묶음을 뺀 나머지 거래에만 있어요.</p>
   </div>
   <div id="txBar"></div>
-  <div class="panel" style="padding:0"><div class="scroll"><table class="t ivt txt">
+  <div class="panel tscroll" style="padding:0"><table class="t ivt txt">
     <thead><tr><th><input type="checkbox" id="txAll" aria-label="보이는 거래 모두 선택"></th><th><button class="thsort" id="txSort" title="눌러서 정렬 순서 바꾸기">일자 ${S.tx.asc ? '▲' : '▼'}</button></th><th>시간</th>${S.tx.tab === 'all' ? '<th>계좌</th>' : ''}<th class="num">입금</th><th class="num">출금</th><th class="num">잔액</th><th>적요1</th><th>의뢰인/수취인</th><th>일보 내역</th>
       <th title="자금일보 확인">${fsel('day', '자금')}</th><th title="예입카드 입력">${fsel('card', '예입')}</th><th title="전표입력">${fsel('voucher', '전표')}</th></tr></thead>
-    <tbody id="txBody"></tbody></table></div><div id="txMore"></div></div>`;
+    <tbody id="txBody"></tbody></table></div><div id="txMore"></div>`;
   drawTxBody(am);
 }
 function chkCell(t, f) {
@@ -2608,15 +2618,15 @@ async function renderInv() {
   </div>
   ${IV.status === 'acct' ? `<div class="chips" id="ivAccs">${Object.entries(accs).sort((a, b) => a[0] === '(계정명 없음)' ? -1 : b[0] === '(계정명 없음)' ? 1 : a[0].localeCompare(b[0])).map(([a, n]) => `<button class="chip acchip ${IV.accSel === a ? 'on' : ''}" data-acc="${esc(a)}">${esc(a)} <b>${n}</b></button>`).join('')}</div>` : ''}
   ${IV.sel.size ? `<div class="toolbar"><span>${IV.sel.size}건 · ${won(selSum)}원 선택</span><span class="spacer"></span><button class="btn sm" id="ivBulkPaid">선택 건 ${IV.kind === 'sell' ? '입금' : '지급'} 처리</button>${IV.kind === 'buy' ? '<button class="btn sm" id="ivMakeBatch">대량이체 파일 만들기</button>' : ''}<button class="btn sm" id="ivSelClear">선택 해제</button></div>` : ''}
-  <div class="panel" style="padding:0"><table class="t ivt ivc">
+  <div class="panel tscroll" style="padding:0"><table class="t ivt ivc">
     <thead><tr><th class="c-sel"><input type="checkbox" id="ivSelAll" aria-label="이 페이지 처리 대상 모두 선택"></th>
       <th class="c-date">작성 ${arrow('date')}</th><th>거래처</th><th>품목</th><th class="num c-amt">금액</th>
       <th class="c-chk">${IV.kind === 'sell' ? '입금' : '기지급'} ${arrow('status')}</th><th class="c-chk">품의서 ${arrow('approval')}</th>
       <th class="c-fit">계정명 ${arrow('account')}</th>${IV.kind === 'buy' ? '<th class="c-fit">이체 메모</th>' : ''}<th class="c-chk">전표</th><th class="c-chk">${L.excluded}</th><th class="c-chk">발행취소</th></tr></thead>
-    <tbody>${list.length ? pageSlice(list).map(invRowHtml).join('') : `<tr><td colspan="12" class="empty">${all.length ? '조건에 맞는 계산서가 없어요.' : '이 달 세금계산서가 아직 없어요. 위에서 세금계산서 엑셀을 업로드하세요.'}</td></tr>`}</tbody>
+    <tbody>${list.length ? list.map(invRowHtml).join('') : `<tr><td colspan="12" class="empty">${all.length ? '조건에 맞는 계산서가 없어요.' : '이 달 세금계산서가 아직 없어요. 위에서 세금계산서 엑셀을 업로드하세요.'}</td></tr>`}</tbody>
   </table></div>
   ${IV.status === 'void' ? `<p class="hint" style="margin:8px 4px">마이너스 계산서와 같은 업체·같은 금액의 원래 계산서를 모아 보여줘요. 자동으로 빼지 않으니, 확인하고 <b>발행취소</b>나 <b>기지급</b>을 체크해 주세요.</p>` : ''}
-  ${pagerHtml(list.length)}
+  <p class="hint" style="margin:6px 4px">${list.length}건</p>
   ${IV.kind === 'buy' ? batchesHtml() : ''}
   ${uploadsHtml()}`;
   fitInputs(el);
