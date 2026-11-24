@@ -213,7 +213,7 @@ tr.voided td:last-child,tr.voided td:nth-last-child(2){text-decoration:none;opac
 .stamp.gray{border-color:#B9C6C4;color:#5E716F;background:#F4F7F6;transform:rotate(8deg)}
 .stamp small{font-size:10.5px;font-weight:700}
 .stamp.warn{border-color:#E39A3B;color:#B5651D;background:#FFF1DE;transform:rotate(8deg);cursor:help}
-.stamp.gray{cursor:help}
+
 .entry.pend{background:repeating-linear-gradient(45deg,#FFFDF3,#FFFDF3 8px,#FBF6DE 8px,#FBF6DE 16px);border-left:3px solid var(--gold)}
 .pendtag{background:var(--gold);color:#fff;font-size:11px;font-weight:800;border-radius:4px;padding:0 6px}
 .ivc{table-layout:fixed;width:100%}
@@ -393,7 +393,7 @@ function put(ws, range, v, o = {}) {
   for (const a of cells) {
     const c = ws.getCell(a);
     c.font = { name: XFONT, size: o.sz || 11, bold: !!o.b };
-    c.alignment = { horizontal: o.h || (o.num ? 'right' : 'center'), vertical: o.v || 'center', wrapText: !!o.wrap, shrinkToFit: !!o.shrink };
+    c.alignment = { horizontal: o.h || (o.num ? 'right' : 'center'), vertical: o.v === 'top' ? 'top' : 'middle', wrapText: !!o.wrap, shrinkToFit: !!o.shrink };
     if (o.num) c.numFmt = o.fmt || NF; else if (o.fmt) c.numFmt = o.fmt;
     if (o.border !== false) c.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
   }
@@ -616,7 +616,7 @@ async function addTemplateSheets(wb, c) {
 /* 값이 있는 칸은 세로 가운데 맞춤 */
 function alignMiddle(wb) {
   wb.worksheets.forEach(ws => ws.eachRow({ includeEmpty: false }, row => row.eachCell({ includeEmpty: false }, c => {
-    const a = c.alignment || {}; if (!a.vertical || a.vertical === 'bottom') c.alignment = { ...a, vertical: 'middle' };
+    const a = c.alignment || {}; if (!a.vertical || a.vertical === 'bottom' || a.vertical === 'center') c.alignment = { ...a, vertical: 'middle' };
   })));
 }
 
@@ -939,10 +939,8 @@ async function renderDay() {
   const cashClose = op.cash + f.cashIn - f.cashOut;
   // 유안타처럼 수시입출 내역이 오지 않는 계좌(기타제예금)는 빼고 봐요
   const fed = S.accounts.filter(a => a.subject !== '기타제예금');
-  const coverOf = a6 => { let c = (S.acctCover || {})[a6] || ''; Object.values(S.months).forEach(mm => mm.txns.forEach(t => { if (t.acct6 === a6 && t.date > c) c = t.date; })); return c; };
-  const quiet = fed.filter(a => bank[a.acct6] === undefined), late = quiet.filter(a => coverOf(a.acct6) < S.date);
-  const qTip = quiet.map(a => { const c = coverOf(a.acct6); return `${accName(a)} · ${c < S.date ? (c ? `${md(c)}까지만 올라옴 → 업로드 확인 필요` : '올라온 내역 없음 → 업로드 확인 필요') : '이 날 거래 없음'}`; }).join('&#10;');
-  const stamp = `<div class="stamps">${!tl.hasOpening ? '<span class="stamp pending">이월<br>미설정</span>' : ''}${anyBank ? (allOk ? '<span class="stamp">잔액<br>일치</span>' : '<span class="stamp pending">잔액<br>확인</span>') : ''}${quiet.length ? `<span class="stamp ${late.length ? 'warn' : 'gray'}" title="${esc(qTip).replace(/&amp;#10;/g, '&#10;')}">거래<br>없음</span>` : ''}</div>`;
+  const quiet = fed.filter(a => bank[a.acct6] === undefined);
+  const stamp = `<div class="stamps">${!tl.hasOpening ? '<span class="stamp pending">이월<br>미설정</span>' : ''}${anyBank ? (allOk ? '<span class="stamp">잔액<br>일치</span>' : '<span class="stamp pending">잔액<br>확인</span>') : ''}${quiet.length ? '<span class="stamp gray">거래<br>없음</span>' : ''}</div>`;
 
   el.innerHTML = `
   <div class="dayhead">
