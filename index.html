@@ -212,6 +212,8 @@ tr.voided td:last-child,tr.voided td:nth-last-child(2){text-decoration:none;opac
 .stamps{display:flex;gap:6px;align-items:center}
 .stamp.gray{border-color:#B9C6C4;color:#5E716F;background:#F4F7F6;transform:rotate(8deg)}
 .stamp small{font-size:10.5px;font-weight:700}
+.stamp.warn{border-color:#E39A3B;color:#B5651D;background:#FFF1DE;transform:rotate(8deg);cursor:help}
+.stamp.gray{cursor:help}
 .entry.pend{background:repeating-linear-gradient(45deg,#FFFDF3,#FFFDF3 8px,#FBF6DE 8px,#FBF6DE 16px);border-left:3px solid var(--gold)}
 .pendtag{background:var(--gold);color:#fff;font-size:11px;font-weight:800;border-radius:4px;padding:0 6px}
 .ivc{table-layout:fixed;width:100%}
@@ -749,6 +751,7 @@ async function loadSettings() {
   const sa = await db.collection('settings').doc('searchAlias').get();
   S.searchAlias = sa.exists && sa.data().list ? sa.data().list : [{ term: '에스원', names: 'S1, 에스원' }];
   S.xferNames = xf.exists && xf.data().names !== undefined ? xf.data().names : '유안타';
+  const ac = await db.collection('settings').doc('acctCover').get(); S.acctCover = ac.exists ? ac.data() : {};
   S.ownNames = xf.exists && xf.data().own !== undefined ? xf.data().own : '강남대성기숙, 기숙QUETTA, QUETTA, 퀀텀, DS연수원';
   try { await loadAutoData(); } catch (err) { console.error(err); }
   S.accounts = a && a.list && a.list.length ? a.list : clone(DEFAULT_ACCOUNTS);
@@ -934,8 +937,12 @@ async function renderDay() {
   const sum = k => S.accounts.reduce((s, a) => s + num(k(a)), 0);
   const tO = sum(a => op.acc[a.acct6]), tI = sum(a => f.acctIn[a.acct6]), tX = sum(a => f.acctOut[a.acct6]);
   const cashClose = op.cash + f.cashIn - f.cashOut;
-  const noTx = S.accounts.filter(a => bank[a.acct6] === undefined).length;
-  const stamp = `<div class="stamps">${!tl.hasOpening ? '<span class="stamp pending">이월<br>미설정</span>' : ''}${anyBank ? (allOk ? '<span class="stamp">잔액<br>일치</span>' : '<span class="stamp pending">잔액<br>확인</span>') : ''}${noTx ? `<span class="stamp gray">거래 없음<br><small>${noTx === S.accounts.length ? '전체' : noTx + '계좌'}</small></span>` : ''}</div>`;
+  // 유안타처럼 수시입출 내역이 오지 않는 계좌(기타제예금)는 빼고 봐요
+  const fed = S.accounts.filter(a => a.subject !== '기타제예금');
+  const coverOf = a6 => { let c = (S.acctCover || {})[a6] || ''; Object.values(S.months).forEach(mm => mm.txns.forEach(t => { if (t.acct6 === a6 && t.date > c) c = t.date; })); return c; };
+  const quiet = fed.filter(a => bank[a.acct6] === undefined), late = quiet.filter(a => coverOf(a.acct6) < S.date);
+  const qTip = quiet.map(a => { const c = coverOf(a.acct6); return `${accName(a)} · ${c < S.date ? (c ? `${md(c)}까지만 올라옴 → 업로드 확인 필요` : '올라온 내역 없음 → 업로드 확인 필요') : '이 날 거래 없음'}`; }).join('&#10;');
+  const stamp = `<div class="stamps">${!tl.hasOpening ? '<span class="stamp pending">이월<br>미설정</span>' : ''}${anyBank ? (allOk ? '<span class="stamp">잔액<br>일치</span>' : '<span class="stamp pending">잔액<br>확인</span>') : ''}${quiet.length ? `<span class="stamp ${late.length ? 'warn' : 'gray'}" title="${esc(qTip).replace(/&amp;#10;/g, '&#10;')}">거래<br>없음</span>` : ''}</div>`;
 
   el.innerHTML = `
   <div class="dayhead">
@@ -1862,6 +1869,9 @@ async function saveUpload() {
     const ds = mine.map(t => t.date).sort();
     return refs[i].set({ fileName: f.name, at: TS(), by: S.user.email, count: mine.length, newCount: mine.filter(t => p.newIds.has(t.id)).length, minDate: ds[0], maxDate: ds[ds.length - 1] });
   }));
+  const cover = {};
+  p.files.forEach((f, i) => { const mine = p.txs.filter(t => t.fi === i); if (!mine.length) return; const mx = mine.map(t => t.date).sort().pop(); new Set(mine.map(t => t.acct6)).forEach(a => { if (mx > (cover[a] || '') && mx > ((S.acctCover || {})[a] || '')) cover[a] = mx; }); });
+  if (Object.keys(cover).length) { await db.collection('settings').doc('acctCover').set(cover, { merge: true }); S.acctCover = { ...(S.acctCover || {}), ...cover }; }
   new Set(p.txs.map(t => ymOf(t.date))).forEach(ym => delete S.months[ym]);
   S.tx.list = null; IV.invs = null; VP.parties = null;
   toast(`${p.files.length}개 파일에서 새 거래 ${p.newCount}건을 저장했어요`);
